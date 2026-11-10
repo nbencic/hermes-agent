@@ -43,6 +43,7 @@ import {
   $busy,
   $connection,
   $messages,
+  $selectedStoredSessionId,
   $sessions,
   $yoloActive,
   setAwaitingResponse,
@@ -708,9 +709,16 @@ export function usePromptActions({
           await withSessionBusyRetry(() => requestGateway('prompt.submit', { session_id: sessionId, text }))
         } catch (firstErr) {
           if (isSessionNotFoundError(firstErr) && selectedStoredSessionIdRef.current) {
+            // Recover the RIGHT conversation. The ref can lag a session switch
+            // (it is updated by an effect), and resuming a stale id re-attaches
+            // the run to whatever conversation was selected before — the prompt
+            // then executes in the wrong session (observed: prompt persisted in
+            // the new session while the turn ran in an old one). Prefer the
+            // store-of-record atom, which is written on the switch itself.
+            const recoveryStoredId = $selectedStoredSessionId.get() ?? selectedStoredSessionIdRef.current
             // Re-register the session in the gateway and get a fresh live ID.
             const resumed = await requestGateway<{ session_id: string }>('session.resume', {
-              session_id: selectedStoredSessionIdRef.current
+              session_id: recoveryStoredId
             })
 
             const recoveredId = resumed?.session_id
