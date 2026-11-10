@@ -178,6 +178,14 @@ SKILLS_GUIDANCE = (
     "Skills that aren't maintained become liabilities."
 )
 
+TODO_GUIDANCE = (
+    "When you use the todo tool, keep the list current as you work: mark each "
+    "item completed (or cancelled) the moment it resolves — do not plan once and "
+    "then abandon the list. Before your final response, close the loop so every "
+    "item is completed or cancelled. A list left with pending or in_progress "
+    "items tells the user that finished work is unfinished."
+)
+
 KANBAN_GUIDANCE = (
     "# Kanban task execution protocol\n"
     "You have been assigned ONE task from "
