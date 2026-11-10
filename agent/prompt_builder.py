@@ -242,6 +242,15 @@ SESSION_SEARCH_GUIDANCE = (
     "context exists, use session_search to recall it before asking them to repeat themselves."
 )
 
+# Todo lists decay: agents plan once and stop updating (measured 2/5 long runs
+# left the list stale while the work was finished, 2026-11). Keep this short —
+# long prose in this block is exactly what gets ignored late in a run.
+TODO_GUIDANCE = (
+    "Keep the todo list current while you work: mark each item completed or cancelled the "
+    "moment it resolves, and close the loop before your final response — a list left with "
+    "open items tells the user finished work is unfinished."
+)
+
 # The opening sentence is worded deliberately: Anthropic's server-side filter rejected the previous phrasing
 # ("After completing a complex task (5+ tool calls)... save the approach as a skill...") on subscription OAuth
 # credentials, surfacing as a billing-shaped HTTP 400. If you rewrite it, re-verify with a subscription OAuth
