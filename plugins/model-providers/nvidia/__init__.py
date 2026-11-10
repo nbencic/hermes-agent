@@ -12,7 +12,7 @@ nvidia = ProviderProfile(
     signup_url="https://build.nvidia.com/",
     fallback_models=(
         "nvidia/llama-3.1-nemotron-70b-instruct",
-        "nvidia/llama-3.3-70b-instruct",
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1",
     ),
     base_url="https://integrate.api.nvidia.com/v1",
     default_max_tokens=16384,

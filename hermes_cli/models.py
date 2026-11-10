@@ -35,7 +35,6 @@ COPILOT_REASONING_EFFORTS_O_SERIES = ["low", "medium", "high"]
 OPENROUTER_MODELS: list[tuple[str, str]] = [
     # Anthropic
     ("anthropic/claude-opus-4.8",              ""),
-    ("anthropic/claude-opus-4.8-fast",         "2x price, higher output speed"),
     ("anthropic/claude-sonnet-4.6",            ""),
     ("anthropic/claude-haiku-4.5",             ""),
     # OpenAI
@@ -43,7 +42,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("openai/gpt-5.5-pro",                     ""),
     ("openai/gpt-5.4-mini",                    ""),
     # Google
-    ("google/gemini-3-pro-preview",            ""),
     ("google/gemini-3.1-pro-preview",          ""),
     ("google/gemini-3.5-flash",                ""),
     # xAI
@@ -77,7 +75,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("openrouter/owl-alpha",                   "free"),
     ("poolside/laguna-m.1:free",               "free"),
     ("tencent/hy3-preview:free",               "free"),
-    ("nvidia/nemotron-3-super-120b-a12b:free", "free"),
     ("nvidia/nemotron-3-ultra-550b-a55b:free", "free"),
     ("inclusionai/ring-2.6-1t:free",           "free"),
 ]
@@ -164,7 +161,6 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-5.5-pro",
         "openai/gpt-5.4-mini",
         # Google
-        "google/gemini-3-pro-preview",
         "google/gemini-3.1-pro-preview",
         "google/gemini-3.5-flash",
         # xAI
@@ -260,26 +256,26 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "glm-5.2",
         "glm-5.1",
         "glm-5",
-        "glm-5v-turbo",
         "glm-5-turbo",
+        "glm-5.3-flash",
+        "glm-5.3-flashx",
         "glm-4.7",
         "glm-4.5",
-        "glm-4.5-flash",
+        "glm-4.5-air",
     ],
     "xai": _xai_curated_models(),
     "nvidia": [
-        # NVIDIA flagship reasoning models
+        # NVIDIA flagship reasoning models (verified against live NIM catalog)
         "nvidia/nemotron-3-super-120b-a12b",
-        "nvidia/nemotron-3-nano-30b-a3b",
-        "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1",
         # Third-party agentic models hosted on build.nvidia.com
         # (map to OpenRouter defaults — users get familiar picks on NIM)
-        "qwen/qwen3.5-397b-a17b",
-        "deepseek-ai/deepseek-v3.2",
+        "deepseek-ai/deepseek-v4.1-flash",
         "moonshotai/kimi-k2.6",
-        "minimaxai/minimax-m2.5",
-        "z-ai/glm5",
-        "openai/gpt-oss-120b",
+        "minimaxai/minimax-m3.1-flash",
+        "z-ai/glm-5.3-flash",
+        "openai/gpt-oss-20b",
     ],
     "kimi-coding": [
         "kimi-k2.7-code",
@@ -341,10 +337,10 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "claude-haiku-4-5-20251001",
     ],
     "deepseek": [
+        "deepseek-flash",
         "deepseek-v4-pro",
-        "deepseek-v4-flash",
-        "deepseek-chat",
-        "deepseek-reasoner",
+        "deepseek-chat",       # retired 2026 — kept so old configs resolve
+        "deepseek-reasoner",   # retired 2026 — kept so old configs resolve
     ],
     "xiaomi": [
         "mimo-v2.5-pro",
@@ -425,7 +421,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "anthropic/claude-opus-4.6",
         "anthropic/claude-sonnet-4.6",
         "openai/gpt-5.4",
-        "google/gemini-3-pro-preview",
+        "google/gemini-3.1-pro-preview",
         "google/gemini-3-flash-preview",
     ],
     # Alibaba DashScope Coding platform (coding-intl) — default endpoint.
@@ -458,18 +454,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "glm-4.7",
         "MiniMax-M2.5",
     ],
-    # Curated HF model list — only agentic models that map to OpenRouter defaults.
-    "huggingface": [
-        "moonshotai/Kimi-K2.5",
-        "Qwen/Qwen3.5-397B-A17B",
-        "Qwen/Qwen3.5-35B-A3B",
-        "deepseek-ai/DeepSeek-V3.2",
-        "MiniMaxAI/MiniMax-M2.5",
-        "zai-org/GLM-5",
-        "XiaomiMiMo/MiMo-V2-Flash",
-        "moonshotai/Kimi-K2-Thinking",
-        "moonshotai/Kimi-K2.6",
-    ],
+    # Curated HF model list — REMOVED: Hugging Face provider retired from Hermes.
     # AWS Bedrock — static fallback list used when dynamic discovery is
     # unavailable (no boto3, no credentials, or API error).  The agent
     # prefers live discovery via ListFoundationModels + ListInferenceProfiles.
@@ -1006,10 +991,9 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [
     ProviderEntry("nvidia",         "NVIDIA NIM",               "NVIDIA NIM (Nemotron models via build.nvidia.com or local NIM)"),
     ProviderEntry("copilot",        "GitHub Copilot",           "GitHub Copilot (Uses GITHUB_TOKEN or gh auth token)"),
     ProviderEntry("copilot-acp",    "GitHub Copilot ACP",       "GitHub Copilot ACP (Spawns copilot --acp --stdio)"),
-    ProviderEntry("huggingface",    "Hugging Face",             "Hugging Face Inference Providers"),
+    ProviderEntry("deepseek",       "DeepSeek",                 "DeepSeek (Flash, V4 Pro — direct API)"),
     ProviderEntry("gemini",         "Google AI Studio",         "Google AI Studio (Native Gemini API)"),
     ProviderEntry("google-gemini-cli", "Google Gemini (OAuth)",   "Google Gemini via OAuth + Code Assist (Code Assist OAuth flow)"),
-    ProviderEntry("deepseek",       "DeepSeek",                 "DeepSeek (V3, R1, coder, direct API)"),
     ProviderEntry("xai",            "xAI",                      "xAI Grok (Direct API)"),
     ProviderEntry("zai",            "Z.AI / GLM",               "Z.AI / GLM (Zhipu direct API)"),
     ProviderEntry("kimi-coding",    "Kimi / Kimi Coding Plan",  "Kimi Coding Plan (api.kimi.com & Moonshot API)"),
@@ -1202,9 +1186,6 @@ _PROVIDER_ALIASES = {
     "qwen-portal": "qwen-oauth",
     "gemini-cli": "google-gemini-cli",
     "gemini-oauth": "google-gemini-cli",
-    "hf": "huggingface",
-    "hugging-face": "huggingface",
-    "huggingface-hub": "huggingface",
     "novita-ai": "novita",
     "novitaai": "novita",
     "mimo": "xiaomi",
@@ -2128,7 +2109,6 @@ _MODELS_DEV_PREFERRED: frozenset[str] = frozenset({
     "perplexity",
     "groq",
     "nvidia",
-    "huggingface",
     "zai",
     "gemini",
     "google",
@@ -2398,7 +2378,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
 #
 # Without this layer, every /model picker open re-fetches every authed
 # provider's /v1/models endpoint. On a well-configured user (anthropic +
-# openai + copilot + gemini + huggingface + ...) that's 2+ seconds of cold
+# openai + copilot + gemini + ...) that's 2+ seconds of cold
 # HTTP roundtrips just to render the provider list.
 #
 # Cache strategy:

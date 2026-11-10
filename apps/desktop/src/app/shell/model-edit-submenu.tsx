@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { useI18n } from '@/i18n'
+import { effectiveEffort } from '@/lib/model-status-label'
 import { notifyError } from '@/store/notifications'
 import {
   $activeSessionId,
@@ -85,6 +86,8 @@ interface ModelEditSubmenuProps {
   onActivate: () => Promise<boolean> | void
   /** Switch to a specific model id (used to swap base ⇄ -fast variant). */
   onSelectModel: (model: string) => Promise<boolean> | void
+  /** Provider slug of this row's model — drives effective-effort labeling. */
+  provider?: string
   /** Whether this model supports reasoning effort. */
   reasoning: boolean
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
@@ -95,6 +98,7 @@ export function ModelEditSubmenu({
   isActive,
   onActivate,
   onSelectModel,
+  provider,
   reasoning,
   requestGateway
 }: ModelEditSubmenuProps) {
@@ -209,16 +213,27 @@ export function ModelEditSubmenu({
                 onValueChange={value => void patchReasoning(value, currentReasoningEffort)}
                 value={effort}
               >
-                {EFFORT_OPTIONS.map(option => (
-                  <DropdownMenuRadioItem
-                    className={dropdownMenuRow}
-                    key={option.value}
-                    onSelect={event => event.preventDefault()}
-                    value={option.value}
-                  >
-                    {copy[option.labelKey]}
-                  </DropdownMenuRadioItem>
-                ))}
+                {EFFORT_OPTIONS.map(option => {
+                  // Show the level this provider will actually run when it
+                  // differs from Hermes' internal name (DeepSeek: minimal→Low,
+                  // medium→High) so the choice can't mislead.
+                  const effective = effectiveEffort(option.value, provider)
+                  const hint = effective.level !== option.value ? effective.label : ''
+
+                  return (
+                    <DropdownMenuRadioItem
+                      className={dropdownMenuRow}
+                      key={option.value}
+                      onSelect={event => event.preventDefault()}
+                      value={option.value}
+                    >
+                      {copy[option.labelKey]}
+                      {hint ? (
+                        <span className="ml-2 text-(--ui-text-tertiary)">→ {hint}</span>
+                      ) : null}
+                    </DropdownMenuRadioItem>
+                  )
+                })}
               </DropdownMenuRadioGroup>
             </>
           ) : null}

@@ -18,7 +18,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { HermesGateway } from '@/hermes'
 import { getGlobalModelOptions } from '@/hermes'
 import { useI18n } from '@/i18n'
-import { displayModelName, modelDisplayParts, reasoningEffortLabel } from '@/lib/model-status-label'
+import { effectiveEffort, displayModelName, modelDisplayParts } from '@/lib/model-status-label'
 import { cn } from '@/lib/utils'
 import {
   $visibleModels,
@@ -168,7 +168,9 @@ export function ModelMenuPanel({ gateway, onSelectModel, requestGateway }: Model
                 const meta = isCurrent
                   ? [
                       fastControl.kind !== 'none' && fastControl.on ? copy.fast : null,
-                      reasoningEffortLabel(currentReasoningEffort) || copy.medium
+                      // Provider-aware: show the level the model will ACTUALLY
+                      // run (e.g. DeepSeek coerces medium→high, minimal→low).
+                      effectiveEffort(currentReasoningEffort, group.provider.slug).label
                     ]
                       .filter(Boolean)
                       .join(' ')
@@ -208,6 +210,7 @@ export function ModelMenuPanel({ gateway, onSelectModel, requestGateway }: Model
                       isActive={isCurrent}
                       onActivate={() => switchTo(family.id, group.provider.slug)}
                       onSelectModel={nextModel => switchTo(nextModel, group.provider.slug)}
+                      provider={group.provider.slug}
                       reasoning={caps?.reasoning ?? true}
                       requestGateway={requestGateway}
                     />
