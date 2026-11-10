@@ -20,7 +20,9 @@ import {
   stopBackgroundProcess
 } from '@/store/composer-status'
 import { $threadScrolledUp } from '@/store/thread-scroll'
+import { clearSessionTodos } from '@/store/todos'
 import { openSessionInNewWindow } from '@/store/windows'
+import { $busy } from '@/store/session'
 
 import { StatusItemRow } from './status-row'
 
@@ -28,9 +30,14 @@ import { StatusItemRow } from './status-row'
 // emit no event when they die). Only armed while a running row is on screen.
 const BACKGROUND_POLL_MS = 5_000
 
-const groupLabel = (group: StatusGroup, s: Translations['statusStack']) => {
+const groupLabel = (group: StatusGroup, s: Translations['statusStack'], sessionRunning: boolean) => {
   if (group.type === 'todo') {
-    return s.todos(group.items.filter(i => i.todoStatus === 'completed').length, group.items.length)
+    const done = group.items.filter(i => i.todoStatus === 'completed').length
+    const hasOpen = group.items.some(i => i.todoStatus === 'pending' || i.todoStatus === 'in_progress')
+
+    // A plan with open items and no live run means the agent abandoned the
+    // list — say so instead of letting "Tasks 1/7" imply work in progress.
+    return !sessionRunning && hasOpen ? s.todosLeftOpen(done, group.items.length) : s.todos(done, group.items.length)
   }
 
   return group.type === 'subagent' ? s.subagents(group.items.length) : s.background(group.items.length)
@@ -52,6 +59,7 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   const { t } = useI18n()
   const navigate = useNavigate()
   const itemsBySession = useStore($statusItemsBySession)
+  const busy = useStore($busy)
   const scrolledUp = useStore($threadScrolledUp)
 
   const groups = useMemo(
@@ -81,6 +89,13 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
 
   const openAgents = () => navigate(AGENTS_ROUTE)
 
+  // $workingSessionIds is keyed by STORED session id while this component gets
+  // the RUNTIME id — using it here made sessionRunning permanently false and
+  // painted live plans as abandoned. $busy is the composer's own per-window
+  // run signal (same one that drives Stop/Enter), so it always matches the
+  // session this stack is rendered for.
+  const sessionRunning = !!sessionId && busy
+
   const openSubagent = (item: ComposerStatusItem) =>
     item.sessionId ? void openSessionInNewWindow(item.sessionId, { watch: true }) : openAgents()
 
@@ -99,6 +114,16 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
             >
               {t.statusStack.agents}
             </Button>
+          ) : group.type === 'todo' && sessionId && !sessionRunning ? (
+            <Button
+              className="text-muted-foreground/75 hover:text-foreground/90"
+              onClick={() => clearSessionTodos(sessionId)}
+              size="micro"
+              type="button"
+              variant="text"
+            >
+              {t.statusStack.dismiss}
+            </Button>
           ) : undefined
         }
         defaultCollapsed={group.type !== 'todo'}
@@ -107,7 +132,7 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
             <Codicon className="text-muted-foreground/70" name="checklist" size="0.8rem" />
           ) : undefined
         }
-        label={groupLabel(group, t.statusStack)}
+        label={groupLabel(group, t.statusStack, sessionRunning)}
       >
         {group.items.map(item => (
           <StatusItemRow
@@ -116,6 +141,7 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
             onDismiss={sessionId ? id => dismissBackgroundProcess(sessionId, id) : undefined}
             onOpen={() => openSubagent(item)}
             onStop={sessionId ? id => stopBackgroundProcess(sessionId, id) : undefined}
+            sessionRunning={sessionRunning}
           />
         ))}
       </StatusSection>

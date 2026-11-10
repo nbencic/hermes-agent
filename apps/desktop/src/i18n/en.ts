@@ -1323,6 +1323,7 @@ export const en: Translations = {
     background: count => `${count} Background`,
     subagents: count => `${count} Subagent${count === 1 ? '' : 's'}`,
     todos: (done, total) => `Tasks ${done}/${total}`,
+    todosLeftOpen: (done, total) => `Tasks ${done}/${total} · plan left open`,
     running: 'Running',
     stop: 'Stop',
     dismiss: 'Dismiss',

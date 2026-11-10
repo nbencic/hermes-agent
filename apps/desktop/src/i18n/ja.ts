@@ -1461,6 +1461,7 @@ export const ja = defineLocale({
     background: count => `バックグラウンド ${count} 件`,
     subagents: count => `サブエージェント ${count} 件`,
     todos: (done, total) => `タスク ${done}/${total}`,
+    todosLeftOpen: (done, total) => `タスク ${done}/${total} · 計画は未完了`,
     running: '実行中',
     stop: '停止',
     dismiss: '閉じる',

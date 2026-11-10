@@ -30,8 +30,10 @@ const TODO_GLYPHS: Record<Exclude<TodoStatus, 'in_progress' | 'pending'>, { icon
 
 // Left slot: braille spinner while running, otherwise a small status dot
 // (green = done, red = failed) so the slot is always filled and rows align.
-function leadingGlyph(item: ComposerStatusItem, s: Translations['statusStack']): ReactNode {
-  if (item.todoStatus === 'pending') {
+// `sessionRunning` guards the todo case: an in_progress item from a dead run
+// must not keep a spinner turning — it renders as the open (dashed) ring.
+function leadingGlyph(item: ComposerStatusItem, s: Translations['statusStack'], sessionRunning: boolean): ReactNode {
+  if (item.todoStatus === 'pending' || (item.todoStatus === 'in_progress' && !sessionRunning)) {
     return (
       <span
         aria-hidden
@@ -73,6 +75,9 @@ interface StatusItemRowProps {
   onOpen?: () => void
   /** Cancel a running background task. */
   onStop?: (id: string) => void
+  /** False when the owning session has no active run — todo rows stop
+   *  pretending to be live (no spinner, muted text). */
+  sessionRunning?: boolean
 }
 
 /**
@@ -80,7 +85,13 @@ interface StatusItemRowProps {
  * Memoised + keyed by id so parent re-renders never remount it (the spinner
  * keeps ticking instead of resetting).
  */
-export const StatusItemRow = memo(function StatusItemRow({ item, onDismiss, onOpen, onStop }: StatusItemRowProps) {
+export const StatusItemRow = memo(function StatusItemRow({
+  item,
+  onDismiss,
+  onOpen,
+  onStop,
+  sessionRunning = true
+}: StatusItemRowProps) {
   const { t } = useI18n()
   const s = t.statusStack
   const [outputOpen, setOutputOpen] = useState(false)
@@ -101,7 +112,7 @@ export const StatusItemRow = memo(function StatusItemRow({ item, onDismiss, onOp
   return (
     <Fragment>
       <StatusRow
-        leading={leadingGlyph(item, s)}
+        leading={leadingGlyph(item, s, sessionRunning)}
         onActivate={onActivate}
         trailing={
           action ? (
@@ -127,13 +138,18 @@ export const StatusItemRow = memo(function StatusItemRow({ item, onDismiss, onOp
       >
         <span
           className={cn(
-            'min-w-0 max-w-[18rem] truncate text-[0.73rem] leading-4',
+            // Reactive to window width: fills the row (the composer column
+            // scales with the viewport) and wraps to a second line when the
+            // description needs it, instead of a fixed 18rem cut. Full text
+            // stays available via the native title tooltip.
+            'min-w-0 flex-1 line-clamp-2 text-[0.73rem] leading-4',
             failed
               ? 'text-destructive/90'
-              : item.todoStatus && item.todoStatus !== 'in_progress'
+              : item.todoStatus && (item.todoStatus !== 'in_progress' || !sessionRunning)
                 ? 'text-muted-foreground/75'
                 : 'text-foreground/92'
           )}
+          title={item.title}
         >
           {item.title}
         </span>

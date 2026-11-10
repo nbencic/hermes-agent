@@ -1004,6 +1004,8 @@ export interface Translations {
     background: (count: number) => string
     subagents: (count: number) => string
     todos: (done: number, total: number) => string
+    /** Header suffix when the plan still has open items but the session is idle. */
+    todosLeftOpen: (done: number, total: number) => string
     running: string
     stop: string
     dismiss: string
