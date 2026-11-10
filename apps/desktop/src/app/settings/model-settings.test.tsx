@@ -45,7 +45,7 @@ beforeEach(() => {
     tasks: [{ task: 'vision', provider: 'auto', model: '', base_url: '' }]
   })
   setModelAssignment.mockResolvedValue({ provider: 'nous', model: 'hermes-4', gateway_tools: [] })
-  getRecommendedDefaultModel.mockResolvedValue({ provider: 'deepseek', model: 'deepseek-chat', free_tier: null })
+  getRecommendedDefaultModel.mockResolvedValue({ provider: 'deepseek', model: 'deepseek-flash', free_tier: null })
   setEnvVar.mockResolvedValue({ ok: true })
 })
 

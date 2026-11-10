@@ -78,7 +78,7 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
   {
     prefix: 'DEEPSEEK_',
     name: 'DeepSeek',
-    description: 'Direct DeepSeek API (V3.x, R1)',
+    description: 'Direct DeepSeek API (Flash, V4 Pro)',
     docsUrl: 'https://platform.deepseek.com/api_keys',
     priority: 5
   },
@@ -126,13 +126,6 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
     description: 'MiniMax mainland China endpoint',
     docsUrl: 'https://www.minimaxi.com/',
     priority: 11
-  },
-  {
-    prefix: 'HF_',
-    name: 'Hugging Face',
-    description: 'Inference Providers — 20+ open models via router.huggingface.co',
-    docsUrl: 'https://huggingface.co/settings/tokens',
-    priority: 12
   },
   {
     prefix: 'OPENCODE_ZEN_',

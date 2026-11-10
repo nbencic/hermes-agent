@@ -252,8 +252,11 @@ class TestDeepseekCanonicalAndReasonerMapping:
         "deepseek-reasoning-preview",
         "deepseek-cot-experimental",
     ])
-    def test_reasoner_keywords_map_to_reasoner(self, model):
-        assert _normalize_for_deepseek(model) == "deepseek-reasoner"
+    def test_reasoner_keywords_map_to_flash(self, model):
+        # ``deepseek-reasoner`` is retired (API serves only deepseek-flash and
+        # deepseek-v4-pro); reasoner-flavored names map to deepseek-flash,
+        # which defaults to thinking mode ON — the reasoner successor.
+        assert _normalize_for_deepseek(model) == "deepseek-flash"
 
     @pytest.mark.parametrize("model", [
         "deepseek-chat-v3.1",    # 'chat' prefix, not V-series pattern
@@ -261,5 +264,7 @@ class TestDeepseekCanonicalAndReasonerMapping:
         "something-random",
         "gpt-5",                 # non-DeepSeek names still fall through
     ])
-    def test_unknown_names_fall_back_to_chat(self, model):
-        assert _normalize_for_deepseek(model) == "deepseek-chat"
+    def test_unknown_names_fall_back_to_flash(self, model):
+        # Fallback is deepseek-flash — the only general-purpose ID the live
+        # API serves (deepseek-chat retired 2026).
+        assert _normalize_for_deepseek(model) == "deepseek-flash"

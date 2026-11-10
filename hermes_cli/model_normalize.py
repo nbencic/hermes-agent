@@ -83,9 +83,7 @@ _STRIP_VENDOR_ONLY_PROVIDERS: frozenset[str] = frozenset({
 })
 
 # Providers whose native naming is authoritative -- pass through unchanged.
-_AUTHORITATIVE_NATIVE_PROVIDERS: frozenset[str] = frozenset({
-    "huggingface",
-})
+_AUTHORITATIVE_NATIVE_PROVIDERS: frozenset[str] = frozenset()
 
 # Direct providers that accept bare native names but should repair a matching
 # provider/ prefix when users copy the aggregator form into config.yaml.
@@ -130,11 +128,18 @@ _DEEPSEEK_REASONER_KEYWORDS: frozenset[str] = frozenset({
 })
 
 _DEEPSEEK_CANONICAL_MODELS: frozenset[str] = frozenset({
+    "deepseek-flash",      # V4.1-Flash — current default (thinking-capable)
+    "deepseek-v4-pro",     # V4 Pro — first-class model ID
+    # Retired 2026 identifiers; kept canonical so old configs pass through
+    # instead of being rewritten to a different generation.
     "deepseek-chat",       # V3 on DeepSeek direct and most aggregators
     "deepseek-reasoner",   # R1-family reasoning model
-    "deepseek-v4-pro",     # V4 Pro — first-class model ID
-    "deepseek-v4-flash",   # V4 Flash — first-class model ID
 })
+
+# Current-generation model IDs (verified 2026-11 against GET /v1/models:
+# only ``deepseek-flash`` and ``deepseek-v4-pro`` are served). Dated
+# variants like ``deepseek-flash-20261017`` also pass through.
+_DEEPSEEK_FLASH_RE = re.compile(r"^deepseek-flash([-.].+)?$")
 
 # First-class V-series IDs (``deepseek-v4-pro``, ``deepseek-v4-flash``,
 # future ``deepseek-v5-*``, dated variants like ``deepseek-v4-flash-20260423``).
@@ -149,13 +154,17 @@ def _normalize_for_deepseek(model_name: str) -> str:
     """Map a model input to a DeepSeek-accepted identifier.
 
     Rules:
-    - Already a known canonical (``deepseek-chat``/``deepseek-reasoner``/
-      ``deepseek-v4-pro``/``deepseek-v4-flash``) -> pass through.
+    - Already a known canonical (``deepseek-flash``/``deepseek-v4-pro``/
+      ``deepseek-chat``/``deepseek-reasoner``) -> pass through.
     - Matches the V-series pattern ``deepseek-v<digit>...`` -> pass through
       (covers future ``deepseek-v5-*`` and dated variants without a release).
+    - Matches the flash pattern ``deepseek-flash...`` -> pass through
+      (covers dated variants like ``deepseek-flash-20261017``).
     - Contains a reasoner keyword (r1, think, reasoning, cot, reasoner)
-      -> ``deepseek-reasoner``.
-    - Everything else -> ``deepseek-chat``.
+      -> ``deepseek-flash`` (successor to the retired ``deepseek-reasoner``;
+      thinking mode is enabled by default for this model).
+    - Everything else -> ``deepseek-flash`` (the only general-purpose ID the
+      live API serves; verified 2026-11 via ``GET /v1/models``).
 
     Args:
         model_name: The bare model name (vendor prefix already stripped).
@@ -172,12 +181,18 @@ def _normalize_for_deepseek(model_name: str) -> str:
     if _DEEPSEEK_V_SERIES_RE.match(bare):
         return bare
 
+    # Flash first-class IDs (deepseek-flash and dated variants)
+    if _DEEPSEEK_FLASH_RE.match(bare):
+        return bare
+
     # Check for reasoner-like keywords anywhere in the name
     for keyword in _DEEPSEEK_REASONER_KEYWORDS:
         if keyword in bare:
-            return "deepseek-reasoner"
+            # ``deepseek-reasoner`` was retired; deepseek-flash is its
+            # successor and defaults to thinking mode ON.
+            return "deepseek-flash"
 
-    return "deepseek-chat"
+    return "deepseek-flash"
 
 
 # ---------------------------------------------------------------------------

@@ -60,6 +60,35 @@ class TestDeepSeekThinkingWireShape:
         )
         assert top_level == {"reasoning_effort": effort}
 
+    def test_none_effort_disables_thinking(self, deepseek_profile):
+        """'none' must flip the wire flag — omitting the param would leave the
+        server default (thinking ON at high), which was the silent-mismatch
+        bug behind the effort pill showing 'Off' while running High."""
+        extra_body, top_level = deepseek_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "none"},
+            model="deepseek-flash",
+        )
+        assert extra_body == {"thinking": {"type": "disabled"}}
+        assert top_level == {}
+
+    def test_minimal_effort_is_sent_as_low(self, deepseek_profile):
+        """Official table: minimal → low. Sending nothing (previous behavior)
+        left the server default high, contradicting the pill's 'Low'."""
+        _, top_level = deepseek_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "minimal"},
+            model="deepseek-flash",
+        )
+        assert top_level == {"reasoning_effort": "low"}
+
+    def test_none_effort_on_non_thinking_model_is_noop(self, deepseek_profile):
+        """Legacy V3 (deepseek-chat) has no thinking mode — leave wire untouched."""
+        extra_body, top_level = deepseek_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "none"},
+            model="deepseek-chat",
+        )
+        assert extra_body == {}
+        assert top_level == {}
+
     @pytest.mark.parametrize("effort", ["xhigh", "max", "MAX", "  Max  "])
     def test_xhigh_and_max_normalize_to_max(self, deepseek_profile, effort):
         _, top_level = deepseek_profile.build_api_kwargs_extras(
@@ -106,7 +135,7 @@ class TestDeepSeekThinkingWireShape:
 
 
 class TestDeepSeekModelGating:
-    """V4 family + ``deepseek-reasoner`` get thinking; V3 stays untouched."""
+    """V4 family + ``deepseek-flash`` + ``deepseek-reasoner`` get thinking; V3 stays untouched."""
 
     @pytest.mark.parametrize(
         "model",
@@ -114,6 +143,8 @@ class TestDeepSeekModelGating:
             "deepseek-v4-pro",
             "deepseek-v4-flash",
             "deepseek-v4-future-variant",
+            "deepseek-flash",           # V4.1-Flash — current default
+            "deepseek-flash-20261017",  # dated flash variant
             "deepseek-reasoner",
             "DEEPSEEK-V4-PRO",  # case-insensitive
         ],
@@ -195,12 +226,12 @@ class TestDeepSeekAuxModel:
     system.
     """
 
-    def test_profile_advertises_deepseek_chat(self, deepseek_profile):
-        assert deepseek_profile.default_aux_model == "deepseek-chat"
+    def test_profile_advertises_deepseek_flash(self, deepseek_profile):
+        assert deepseek_profile.default_aux_model == "deepseek-flash"
 
-    def test_consumer_api_returns_deepseek_chat(self):
+    def test_consumer_api_returns_deepseek_flash(self):
         from agent.auxiliary_client import _get_aux_model_for_provider
-        assert _get_aux_model_for_provider("deepseek") == "deepseek-chat"
+        assert _get_aux_model_for_provider("deepseek") == "deepseek-flash"
 
     def test_consumer_api_returns_non_empty(self):
         from agent.auxiliary_client import _get_aux_model_for_provider

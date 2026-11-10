@@ -28,7 +28,9 @@ def _is_deepseek_thinking_model(model: str | None) -> bool:
     m = _flat_model_name(model)
     if m.startswith("deepseek-v") and not m.startswith("deepseek-v3"):
         return True
-    return m == "deepseek-reasoner"
+    # deepseek-flash (V4.1-Flash) is thinking-capable; deepseek-reasoner
+    # (R1) is retired but kept for old configs.
+    return m == "deepseek-reasoner" or m.startswith("deepseek-flash")
 
 
 class OpenCodeGoProfile(ProviderProfile):

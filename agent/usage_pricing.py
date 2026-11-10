@@ -13,6 +13,34 @@ DEFAULT_PRICING = {"input": 0.0, "output": 0.0}
 
 _ZERO = Decimal("0")
 _ONE_MILLION = Decimal("1000000")
+
+# DeepSeek time-of-day pricing. Peak hours are 01:00-04:00 and 06:00-10:00 UTC,
+# Monday-Friday; every other hour (including all weekend) bills at exactly half.
+# Chinese public holidays are also off-peak — not modelled here, so on those
+# ~11 days/yr we overstate cost rather than understate the discount.
+_DEEPSEEK_PEAK_WINDOWS_UTC: tuple[tuple[int, int], ...] = ((1, 4), (6, 10))
+
+
+def is_off_peak(schedule: Optional[str], at: Optional[datetime] = None) -> bool:
+    """Whether ``at`` falls in a provider's discounted window.
+
+    ``at`` defaults to now (UTC) and naive datetimes are read as UTC, which
+    matches how callers account usage immediately after a response.
+    """
+    if schedule != "deepseek":
+        return False
+
+    when = at or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    utc = when.astimezone(timezone.utc)
+
+    if utc.weekday() >= 5:  # Saturday / Sunday
+        return True
+
+    return not any(start <= utc.hour < end for start, end in _DEEPSEEK_PEAK_WINDOWS_UTC)
+
+
 _NOUS_DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
 
 CostStatus = Literal["actual", "estimated", "included", "unknown"]
@@ -65,6 +93,11 @@ class PricingEntry:
     source_url: Optional[str] = None
     pricing_version: Optional[str] = None
     fetched_at: Optional[datetime] = None
+    # List prices above are the PEAK rates. Providers that discount by
+    # time-of-day declare a schedule + multiplier here; estimate_usage_cost
+    # applies it when it knows when the call happened.
+    off_peak_multiplier: Optional[Decimal] = None
+    off_peak_schedule: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -379,6 +412,7 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         pricing_version="anthropic-pricing-2026-05",
     ),
     # DeepSeek
+    # Retired 2026 identifiers — kept so historical usage records still price.
     (
         "deepseek",
         "deepseek-chat",
@@ -403,12 +437,34 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         "deepseek",
         "deepseek-v4-pro",
     ): PricingEntry(
-        input_cost_per_million=Decimal("1.74"),
-        output_cost_per_million=Decimal("3.48"),
-        cache_read_cost_per_million=Decimal("0.0145"),
+        input_cost_per_million=Decimal("1.32"),
+        output_cost_per_million=Decimal("3.96"),
+        cache_read_cost_per_million=Decimal("0.044"),
+        off_peak_multiplier=Decimal("0.5"),
+        off_peak_schedule="deepseek",
         source="official_docs_snapshot",
         source_url="https://api-docs.deepseek.com/quick_start/pricing",
-        pricing_version="deepseek-pricing-2026-05-12",
+        pricing_version="deepseek-pricing-2026-11",
+    ),
+    # deepseek-flash (V4.1-Flash) — current default model.
+    #
+    # PEAK rates from the live pricing page; off-peak (see
+    # ``_DEEPSEEK_PEAK_WINDOWS_UTC``) is exactly half. ``cache_read`` is the
+    # single most important number here: real sessions run ~98.6% cache-hit on
+    # input, so a missing cache-read price makes every estimate "unknown" and
+    # renders as $0.00 — which is exactly the bug this entry fixes.
+    (
+        "deepseek",
+        "deepseek-flash",
+    ): PricingEntry(
+        input_cost_per_million=Decimal("0.30"),
+        output_cost_per_million=Decimal("1.20"),
+        cache_read_cost_per_million=Decimal("0.006"),
+        off_peak_multiplier=Decimal("0.5"),
+        off_peak_schedule="deepseek",
+        source="official_docs_snapshot",
+        source_url="https://api-docs.deepseek.com/quick_start/pricing",
+        pricing_version="deepseek-pricing-2026-11",
     ),
     # Google Gemini
     (
@@ -780,6 +836,7 @@ def estimate_usage_cost(
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
+    at: Optional[datetime] = None,
 ) -> CostResult:
     route = resolve_billing_route(model_name, provider=provider, base_url=base_url)
     if route.billing_mode == "subscription_included":
@@ -831,6 +888,12 @@ def estimate_usage_cost(
         amount += Decimal(usage.cache_write_tokens) * entry.cache_write_cost_per_million / _ONE_MILLION
     if entry.request_cost is not None and usage.request_count:
         amount += Decimal(usage.request_count) * entry.request_cost
+
+    # Time-of-day discount (DeepSeek off-peak, 50%). Applied after the sum so
+    # it covers input, output and cache buckets uniformly.
+    if entry.off_peak_multiplier is not None and is_off_peak(entry.off_peak_schedule, at):
+        amount *= entry.off_peak_multiplier
+        notes.append("Off-peak rate applied (50% of peak list price).")
 
     status: CostStatus = "estimated"
     label = f"~${amount:.2f}"
