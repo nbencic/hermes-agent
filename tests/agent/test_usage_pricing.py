@@ -1,11 +1,19 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from agent.usage_pricing import (
     CanonicalUsage,
     estimate_usage_cost,
     get_pricing_entry,
+    is_off_peak,
     normalize_usage,
 )
+
+# Fixed instants so time-of-day pricing can't make tests flake.
+# 2026-11-10 is a Tuesday; 2026-11-07 is a Saturday.
+DEEPSEEK_PEAK = datetime(2026, 11, 10, 2, 30, tzinfo=timezone.utc)     # 02:30 UTC Tue
+DEEPSEEK_OFFPEAK = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)  # 12:00 UTC Tue
+DEEPSEEK_WEEKEND = datetime(2026, 11, 7, 2, 30, tzinfo=timezone.utc)   # 02:30 UTC Sat
 
 
 def test_normalize_usage_anthropic_keeps_cache_buckets_separate():
@@ -233,9 +241,10 @@ def test_deepseek_v4_pro_pricing_entry_exists():
     assert entry is not None
     assert entry.input_cost_per_million is not None
     assert entry.output_cost_per_million is not None
-    assert float(entry.input_cost_per_million) == 1.74
-    assert float(entry.output_cost_per_million) == 3.48
-    assert float(entry.cache_read_cost_per_million) == 0.0145
+    assert entry.cache_read_cost_per_million is not None
+    assert float(entry.input_cost_per_million) == 1.32
+    assert float(entry.output_cost_per_million) == 3.96
+    assert float(entry.cache_read_cost_per_million) == 0.044
 
 
 def test_deepseek_v4_pro_estimate_usage_cost():
@@ -244,9 +253,64 @@ def test_deepseek_v4_pro_estimate_usage_cost():
         "deepseek-v4-pro",
         CanonicalUsage(input_tokens=1000000, output_tokens=500000),
         provider="deepseek",
+        at=DEEPSEEK_PEAK,
     )
 
     assert result.status == "estimated"
     assert result.amount_usd is not None
-    # 1M input × $1.74/M + 500K output × $3.48/M = $1.74 + $1.74 = $3.48
-    assert float(result.amount_usd) == 3.48
+    # 1M input × $1.32/M + 500K output × $3.96/M = $1.32 + $1.98 = $3.30
+    assert float(result.amount_usd) == 3.30
+
+
+def test_deepseek_flash_cache_reads_are_priced_not_unknown():
+    """Regression: cache_read had no price, so ~98.6%-cached sessions priced as
+    'unknown' and rendered $0.00 in insights and the desktop chrome."""
+    result = estimate_usage_cost(
+        "deepseek-flash",
+        CanonicalUsage(input_tokens=2_000, cache_read_tokens=170_000, output_tokens=900),
+        provider="deepseek",
+        at=DEEPSEEK_PEAK,
+    )
+
+    assert result.status == "estimated"
+    assert result.amount_usd is not None
+    # 2k×$0.30 + 170k×$0.006 + 900×$1.20, all per 1M
+    expected = (2000 * 0.30 + 170_000 * 0.006 + 900 * 1.20) / 1_000_000
+    assert abs(float(result.amount_usd) - expected) < 1e-9
+
+
+def test_deepseek_off_peak_is_exactly_half_of_peak():
+    usage = CanonicalUsage(input_tokens=100_000, cache_read_tokens=900_000, output_tokens=50_000)
+    peak = estimate_usage_cost("deepseek-flash", usage, provider="deepseek", at=DEEPSEEK_PEAK)
+    off = estimate_usage_cost("deepseek-flash", usage, provider="deepseek", at=DEEPSEEK_OFFPEAK)
+
+    assert peak.amount_usd is not None and off.amount_usd is not None
+    assert float(peak.amount_usd) == float(off.amount_usd) * 2
+    assert "Off-peak rate applied (50% of peak list price)." in off.notes
+    assert "Off-peak rate applied (50% of peak list price)." not in peak.notes
+
+
+def test_deepseek_weekend_is_off_peak_even_inside_peak_hours():
+    usage = CanonicalUsage(input_tokens=1_000_000)
+    peak = estimate_usage_cost("deepseek-flash", usage, provider="deepseek", at=DEEPSEEK_PEAK)
+    weekend = estimate_usage_cost("deepseek-flash", usage, provider="deepseek", at=DEEPSEEK_WEEKEND)
+
+    assert weekend.amount_usd is not None and peak.amount_usd is not None
+    assert float(weekend.amount_usd) == float(peak.amount_usd) / 2
+    assert is_off_peak("deepseek", DEEPSEEK_WEEKEND) is True
+    assert is_off_peak("deepseek", DEEPSEEK_PEAK) is False
+    # Same clock hour, different weekday → the week is what flips it.
+    assert is_off_peak("deepseek", datetime(2026, 11, 9, 2, 30, tzinfo=timezone.utc)) is False
+
+
+def test_off_peak_window_boundaries_for_deepseek():
+    utc = timezone.utc
+    assert is_off_peak("deepseek", datetime(2026, 11, 10, 0, 59, tzinfo=utc)) is True   # before peak 1
+    assert is_off_peak("deepseek", datetime(2026, 11, 10, 1, 0, tzinfo=utc)) is False   # peak 1 starts
+    assert is_off_peak("deepseek", datetime(2026, 11, 10, 3, 59, tzinfo=utc)) is False  # still peak 1
+    assert is_off_peak("deepseek", datetime(2026, 11, 10, 4, 0, tzinfo=utc)) is True    # gap
+    assert is_off_peak("deepseek", datetime(2026, 11, 10, 6, 0, tzinfo=utc)) is False   # peak 2 starts
+    assert is_off_peak("deepseek", datetime(2026, 11, 10, 10, 0, tzinfo=utc)) is True   # peak 2 ends
+    # Other schedules are unaffected.
+    assert is_off_peak(None, DEEPSEEK_PEAK) is False
+    assert is_off_peak("openai", DEEPSEEK_PEAK) is False

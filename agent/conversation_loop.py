@@ -1052,6 +1052,12 @@ def run_conversation(
                 # session instead of re-failing every retry.
                 if getattr(agent, "_disable_streaming", False):
                     _use_streaming = False
+                # LM Studio with Gemma 4 (and other reasoning models) returns
+                # an empty SSE stream with no finish_reason — the SDK/httpx
+                # client parses the SSE differently than raw curl. Fall back
+                # to non-streaming Chat Completions, which works fine.
+                elif agent.provider == "lmstudio":
+                    _use_streaming = False
                 # CopilotACPClient communicates via subprocess stdio and
                 # returns a plain SimpleNamespace — not an iterable
                 # stream.  Mirror the ACP exclusion used for Responses
