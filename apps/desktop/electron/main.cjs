@@ -2975,7 +2975,16 @@ function runRenderTitleJob(rawUrl) {
       return finish('')
     }
 
-    const readTitle = () => window?.webContents?.getTitle?.() || ''
+    const readTitle = () => {
+      try {
+        return window?.webContents?.getTitle?.() || ''
+      } catch {
+        // Window torn down between timer scheduling and fire — the JS wrapper
+        // is still truthy but its native binding is gone, so property access
+        // throws "Object has been destroyed". Treat as no title.
+        return ''
+      }
+    }
     const scheduleGrace = () => {
       if (graceTimer) clearTimeout(graceTimer)
       graceTimer = setTimeout(() => finish(readTitle()), RENDER_TITLE_GRACE_MS)
@@ -2989,6 +2998,10 @@ function runRenderTitleJob(rawUrl) {
     window.webContents.on('did-fail-load', (_event, _code, _desc, _validatedURL, isMainFrame) => {
       if (isMainFrame) finish('')
     })
+    // If the hidden window dies early (app quit teardown, page self-close via
+    // window.close()), settle immediately so pending timers never fire against
+    // a destroyed window. finish() is idempotent (settled guard).
+    window.on('closed', () => finish(''))
 
     window
       .loadURL(rawUrl, {
