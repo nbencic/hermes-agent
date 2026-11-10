@@ -157,11 +157,6 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         is_aggregator=True,
         base_url_env_var="KILOCODE_BASE_URL",
     ),
-    "huggingface": HermesOverlay(
-        transport="openai_chat",
-        is_aggregator=True,
-        base_url_env_var="HF_BASE_URL",
-    ),
     "novita": HermesOverlay(
         transport="openai_chat",
         is_aggregator=True,
@@ -314,11 +309,6 @@ ALIASES: Dict[str, str] = {
     "gemini-cli": "google-gemini-cli",
     "gemini-oauth": "google-gemini-cli",
 
-
-    # huggingface
-    "hf": "huggingface",
-    "hugging-face": "huggingface",
-    "huggingface-hub": "huggingface",
 
     # novita
     "novita-ai": "novita",

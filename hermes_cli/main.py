@@ -3037,7 +3037,6 @@ def select_provider_and_model(args=None):
         "opencode-zen",
         "opencode-go",
         "alibaba",
-        "huggingface",
         "xiaomi",
         "arcee",
         "gmi",

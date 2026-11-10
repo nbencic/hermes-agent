@@ -1462,6 +1462,11 @@ DEFAULT_CONFIG = {
         # failure isn't silent from the UI's perspective.  Set false to suppress.
         "turn_completion_explainer": True,
         "show_cost": False,       # Show $ cost in the status bar (off by default)
+        # Desktop footer: prefix the model chip with the remaining provider
+        # credit ("19.11$ · DeepSeek Flash · Med") when the active provider
+        # exposes a queryable prepaid balance (DeepSeek, OpenRouter). Providers
+        # without a balance endpoint keep the plain chip. Set false to hide.
+        "provider_credit": True,
         "skin": "default",
         # UI language for static user-facing messages (approval prompts, a
         # handful of gateway slash-command replies).  Does NOT affect agent
@@ -2881,21 +2886,6 @@ OPTIONAL_ENV_VARS = {
     "OPENCODE_GO_BASE_URL": {
         "description": "OpenCode Go base URL override",
         "prompt": "OpenCode Go base URL (leave empty for default)",
-        "url": None,
-        "password": False,
-        "category": "provider",
-        "advanced": True,
-    },
-    "HF_TOKEN": {
-        "description": "Hugging Face token for Inference Providers (20+ open models via router.huggingface.co)",
-        "prompt": "Hugging Face Token",
-        "url": "https://huggingface.co/settings/tokens",
-        "password": True,
-        "category": "provider",
-    },
-    "HF_BASE_URL": {
-        "description": "Hugging Face Inference Providers base URL override",
-        "prompt": "HF base URL (leave empty for default)",
         "url": None,
         "password": False,
         "category": "provider",

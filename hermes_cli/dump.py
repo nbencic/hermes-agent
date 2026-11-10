@@ -314,7 +314,6 @@ def run_dump(args):
         ("MINIMAX_API_KEY", "minimax"),
         ("DEEPSEEK_API_KEY", "deepseek"),
         ("DASHSCOPE_API_KEY", "dashscope"),
-        ("HF_TOKEN", "huggingface"),
         ("NVIDIA_API_KEY", "nvidia"),
         ("OPENCODE_ZEN_API_KEY", "opencode_zen"),
         ("OPENCODE_GO_API_KEY", "opencode_go"),
