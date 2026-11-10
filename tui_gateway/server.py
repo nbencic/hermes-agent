@@ -3987,7 +3987,13 @@ def _(rid, params: dict) -> dict:
         fetch_limit = max(limit * 2, 200)
         rows = [
             s
-            for s in db.list_sessions_rich(source=None, limit=fetch_limit)
+            # order_by_last_active: a compacted conversation is projected to its
+            # live tip, but its row keeps the ROOT's started_at — so ordering by
+            # started_at pushes a long-running, recently-active conversation out
+            # of the window entirely. The desktop then showed the live thread
+            # plus a stale history entry ("two conversations"). This path orders
+            # by the tip's last activity instead.
+            for s in db.list_sessions_rich(source=None, limit=fetch_limit, order_by_last_active=True)
             if (s.get("source") or "").strip().lower() not in deny
         ][:limit]
         return _ok(
@@ -4034,7 +4040,7 @@ def _(rid, params: dict) -> dict:
         # users (lots of recent ``tool`` rows) don't get a false
         # "no eligible session" answer.  ``session.list`` uses a
         # similar over-fetch strategy.
-        rows = db.list_sessions_rich(source=None, limit=200)
+        rows = db.list_sessions_rich(source=None, limit=200, order_by_last_active=True)
         for row in rows:
             src = (row.get("source") or "").strip().lower()
             if src in deny:
