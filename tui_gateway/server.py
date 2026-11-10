@@ -4842,6 +4842,69 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"logged_in": False, "balance_lines": [], "identity_line": None, "topup_url": None, "depleted": False})
 
 
+# Provider-credit cache for the desktop footer chip. Provider balance APIs are
+# third-party, rate-limited endpoints and the footer polls on provider switch +
+# every minute, so hits are memoised per provider. Failures cache briefly so a
+# flapping endpoint can't be hammered by every open window.
+_credit_balance_cache: dict[str, tuple[float, float, dict]] = {}
+_credit_balance_lock = threading.Lock()
+_CREDIT_BALANCE_TTL_S = 60.0
+_CREDIT_BALANCE_RETRY_S = 20.0
+
+
+@method("credits.balance")
+def _(rid, params: dict) -> dict:
+    """Remaining prepaid balance for the active model provider.
+
+    Feeds the desktop footer's model chip (``19.11$ · DeepSeek Flash · Med``).
+    Only providers with a documented balance endpoint answer with a number
+    (DeepSeek ``/user/balance``, OpenRouter ``/credits``); everything else —
+    OAuth/subscription plans, Anthropic/OpenAI project keys, local models —
+    returns ``{"available": False}`` so the chip renders without a prefix.
+
+    Never raises: a network hiccup, missing key, or provider 4xx degrades to
+    "unavailable" rather than surfacing an error into the status bar.
+    """
+    cfg = _load_cfg()
+    if not bool((cfg.get("display") or {}).get("provider_credit", True)):
+        return _ok(rid, {"available": False, "reason": "disabled"})
+
+    provider = str(params.get("provider") or "").strip().lower()
+    if not provider:
+        return _ok(rid, {"available": False, "reason": "no_provider"})
+
+    now = time.monotonic()
+    with _credit_balance_lock:
+        hit = _credit_balance_cache.get(provider)
+    if hit is not None:
+        stamped_at, ttl, cached = hit
+        if now - stamped_at < ttl:
+            return _ok(rid, dict(cached))
+
+    result: dict = {"available": False, "provider": provider}
+    ttl = _CREDIT_BALANCE_RETRY_S
+    try:
+        from agent.account_usage import fetch_account_usage
+
+        snapshot = fetch_account_usage(provider)
+        if snapshot is not None and snapshot.credit_balance is not None:
+            result = {
+                "available": True,
+                "provider": provider,
+                "amount": round(float(snapshot.credit_balance), 2),
+                "currency": snapshot.credit_currency,
+                "source": snapshot.source,
+                "fetched_at": snapshot.fetched_at.isoformat(),
+            }
+            ttl = _CREDIT_BALANCE_TTL_S
+    except Exception:
+        pass
+
+    with _credit_balance_lock:
+        _credit_balance_cache[provider] = (now, ttl, dict(result))
+    return _ok(rid, result)
+
+
 @method("session.status")
 def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)

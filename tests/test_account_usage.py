@@ -201,3 +201,94 @@ def test_fetch_account_usage_openrouter_omits_quota_window_when_key_has_no_limit
     assert snapshot.windows == ()
     assert "Credits balance: $74.50" in snapshot.details
     assert "API key usage: $25.50 total • $1.25 today • $4.50 this week • $18.00 this month" in snapshot.details
+
+
+def test_fetch_account_usage_deepseek_reports_credit_balance(monkeypatch):
+    """DeepSeek's /user/balance feeds the footer credit chip.
+
+    The balance endpoint sits at the API root, so a `/v1` base URL must be
+    trimmed — a wrong URL here silently degrades the chip to "no balance".
+    """
+    monkeypatch.setattr(
+        "agent.account_usage.resolve_runtime_provider",
+        lambda requested, explicit_base_url=None, explicit_api_key=None: {
+            "provider": "deepseek",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "sk-test",
+        },
+    )
+    seen_urls = []
+
+    class _RecordingClient(_Client):
+        def get(self, url, headers=None):
+            seen_urls.append(url)
+            return super().get(url, headers)
+
+    monkeypatch.setattr(
+        "agent.account_usage.httpx.Client",
+        lambda timeout=10.0: _RecordingClient(
+            {
+                "is_available": True,
+                "balance_infos": [
+                    {
+                        "currency": "USD",
+                        "total_balance": "19.11",
+                        "granted_balance": "0.00",
+                        "topped_up_balance": "19.11",
+                    }
+                ],
+            }
+        ),
+    )
+
+    snapshot = fetch_account_usage("deepseek")
+
+    assert seen_urls == ["https://api.deepseek.com/user/balance"]
+    assert snapshot is not None
+    assert snapshot.provider == "deepseek"
+    assert snapshot.source == "balance_api"
+    assert snapshot.credit_balance == 19.11
+    assert snapshot.credit_currency == "USD"
+    assert "Credits balance: $19.11" in snapshot.details
+
+
+def test_fetch_account_usage_deepseek_prefers_usd_wallet(monkeypatch):
+    monkeypatch.setattr(
+        "agent.account_usage.resolve_runtime_provider",
+        lambda requested, explicit_base_url=None, explicit_api_key=None: {
+            "provider": "deepseek",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "sk-test",
+        },
+    )
+    monkeypatch.setattr(
+        "agent.account_usage.httpx.Client",
+        lambda timeout=10.0: _Client(
+            {
+                "is_available": True,
+                "balance_infos": [
+                    {"currency": "CNY", "total_balance": "100.00"},
+                    {"currency": "USD", "total_balance": "12.34"},
+                ],
+            }
+        ),
+    )
+
+    snapshot = fetch_account_usage("deepseek")
+
+    assert snapshot is not None
+    assert snapshot.credit_balance == 12.34
+    assert snapshot.credit_currency == "USD"
+
+
+def test_fetch_account_usage_deepseek_without_key_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        "agent.account_usage.resolve_runtime_provider",
+        lambda requested, explicit_base_url=None, explicit_api_key=None: {
+            "provider": "deepseek",
+            "base_url": "https://api.deepseek.com/v1",
+            "api_key": "",
+        },
+    )
+
+    assert fetch_account_usage("deepseek") is None

@@ -230,13 +230,69 @@ def interruptible_api_call(agent, api_kwargs: dict):
                     raise
                 result["response"] = normalize_converse_response(raw_response)
             else:
-                request_client = _set_request_client(
-                    agent._create_request_openai_client(
-                        reason="chat_completion_request",
-                        api_kwargs=api_kwargs,
+                # LM Studio: the OpenAI SDK's httpx transport returns
+                # response.choices=None despite a valid JSON response
+                # from the server. Bypass the SDK for non-streaming calls.
+                if agent.provider == "lmstudio":
+                    import urllib.request, json
+                    _body = {
+                        k: v for k, v in api_kwargs.items()
+                        if k in ("model", "messages", "max_tokens", "tools", "temperature", "stream", "top_p", "stop", "frequency_penalty", "presence_penalty")
+                    }
+                    # Ensure max_tokens is present — required for reasoning models
+                    if "max_tokens" not in _body or _body["max_tokens"] is None:
+                        _body["max_tokens"] = 4096
+                    if "stream" not in _body:
+                        _body["stream"] = False
+                    else:
+                        _body["stream"] = False
+                    _payload = json.dumps(_body).encode()
+                    _url = agent.base_url.rstrip("/") + "/chat/completions"
+                    _req = urllib.request.Request(
+                        _url, data=_payload,
+                        headers={"Content-Type": "application/json"},
                     )
-                )
-                result["response"] = request_client.chat.completions.create(**api_kwargs)
+                    if agent.api_key:
+                        _req.add_header("Authorization", f"Bearer {agent.api_key}")
+                    try:
+                        with urllib.request.urlopen(_req, timeout=300) as _resp:
+                            _raw = _resp.read()
+                        _data = json.loads(_raw)
+                        # Wrap into SimpleNamespace for Hermes' transport layer
+                        from types import SimpleNamespace
+                        _choices = SimpleNamespace()
+                        _choice = SimpleNamespace()
+                        _msg = SimpleNamespace()
+                        _msg.content = _data["choices"][0]["message"]["content"]
+                        _msg.role = _data["choices"][0]["message"]["role"]
+                        _msg.tool_calls = _data["choices"][0]["message"].get("tool_calls") or []
+                        _msg.function_call = _data["choices"][0]["message"].get("function_call")
+                        _choice.message = _msg
+                        _choice.finish_reason = _data["choices"][0].get("finish_reason", "stop")
+                        _choice.index = _data["choices"][0].get("index", 0)
+                        _choice.logprobs = _data["choices"][0].get("logprobs")
+                        _choices.__setattr__("choices", [_choice])
+                        _choices.id = _data.get("id", "")
+                        _choices.model = _data.get("model", "")
+                        _choices.object = _data.get("object", "chat.completion")
+                        _choices.created = _data.get("created", 0)
+                        if "usage" in _data:
+                            _choices.usage = SimpleNamespace(
+                                **_data["usage"]
+                            ) if isinstance(_data["usage"], dict) else None
+                        else:
+                            _choices.usage = None
+                        result["response"] = _choices
+                    except Exception as _lm_err:
+                        result["error"] = _lm_err
+                else:
+                    request_client = _set_request_client(
+                        agent._create_request_openai_client(
+                            reason="chat_completion_request",
+                            api_kwargs=api_kwargs,
+                        )
+                    )
+                    result["response"] = request_client.chat.completions.create(**api_kwargs)
         except Exception as e:
             # If the request was cancelled by the main thread's interrupt
             # handler, the transport error is the expected consequence of our

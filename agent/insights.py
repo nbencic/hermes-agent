@@ -19,7 +19,7 @@ Usage:
 import json
 import time
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from agent.usage_pricing import (
@@ -30,6 +30,24 @@ from agent.usage_pricing import (
 )
 
 
+def _session_instant(session: dict) -> Optional[datetime]:
+    """Session start as a tz-aware UTC datetime, used for time-of-day pricing.
+
+    DeepSeek bills half price off-peak, so pricing a *historical* session at
+    "now" would be wrong by up to 2x. Tolerates ISO-8601 and epoch shapes and
+    returns None (⇒ estimate at now) for anything unrecognised, so a stray row
+    can never break cost reporting.
+    """
+    raw = session.get("started_at")
+    if raw in (None, ""):
+        return None
+    try:
+        if isinstance(raw, (int, float)):
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        parsed = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def _estimate_cost(
@@ -54,6 +72,7 @@ def _estimate_cost(
         )
         provider = session.get("billing_provider")
         base_url = session.get("billing_base_url")
+        at = _session_instant(session)
     else:
         model = session_or_model or ""
         usage = CanonicalUsage(
@@ -62,11 +81,13 @@ def _estimate_cost(
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
         )
+        at = None
     result = estimate_usage_cost(
         model,
         usage,
         provider=provider,
         base_url=base_url,
+        at=at,
     )
     return float(result.amount_usd or 0.0), result.status
 

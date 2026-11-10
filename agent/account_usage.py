@@ -40,6 +40,12 @@ class AccountUsageSnapshot:
     windows: tuple[AccountUsageWindow, ...] = ()
     details: tuple[str, ...] = ()
     unavailable_reason: Optional[str] = None
+    # Numeric prepaid balance, when the provider exposes one (DeepSeek,
+    # OpenRouter). Surfaces use it to prefix the model chip with the remaining
+    # credit. ``None`` means "this provider has no queryable balance" — never
+    # treat it as zero.
+    credit_balance: Optional[float] = None
+    credit_currency: str = "USD"
 
     @property
     def available(self) -> bool:
@@ -614,6 +620,79 @@ def _fetch_openrouter_account_usage(base_url: Optional[str], api_key: Optional[s
         fetched_at=_utc_now(),
         windows=tuple(windows),
         details=tuple(details),
+        credit_balance=max(0.0, total_credits - total_usage),
+        credit_currency="USD",
+    )
+
+
+def _fetch_deepseek_account_usage(
+    base_url: Optional[str], api_key: Optional[str]
+) -> Optional[AccountUsageSnapshot]:
+    """DeepSeek prepaid balance via ``GET /user/balance``.
+
+    Response shape::
+
+        {"is_available": true,
+         "balance_infos": [{"currency": "USD", "total_balance": "19.11",
+                            "granted_balance": "0.00",
+                            "topped_up_balance": "19.11"}]}
+
+    The balance endpoint lives at the API root, not under ``/v1``, so the
+    runtime base URL is trimmed before building the URL. Returns ``None`` when
+    no key is configured or the account has no balance block at all.
+    """
+    runtime = resolve_runtime_provider(
+        requested="deepseek",
+        explicit_base_url=base_url,
+        explicit_api_key=api_key,
+    )
+    token = str(runtime.get("api_key", "") or "").strip()
+    if not token:
+        return None
+    base = str(runtime.get("base_url") or "https://api.deepseek.com/v1").rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(f"{base}/user/balance", headers=headers)
+        resp.raise_for_status()
+        payload = resp.json() or {}
+
+    infos = [row for row in (payload.get("balance_infos") or []) if isinstance(row, dict)]
+    if not infos:
+        return None
+    # Prefer USD; fall back to the first wallet (e.g. CNY accounts).
+    info = next(
+        (row for row in infos if str(row.get("currency") or "").upper() == "USD"),
+        infos[0],
+    )
+    currency = str(info.get("currency") or "USD").upper()
+    try:
+        total = float(info.get("total_balance") or 0.0)
+    except (TypeError, ValueError):
+        return None
+
+    details = [f"Credits balance: ${total:.2f}"]
+    breakdown: list[str] = []
+    for key, label in (("topped_up_balance", "topped up"), ("granted_balance", "granted")):
+        try:
+            value = float(info.get(key) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            breakdown.append(f"${value:.2f} {label}")
+    if breakdown:
+        details.append(" • ".join(breakdown))
+    if not bool(payload.get("is_available", True)):
+        details.append("Account reports insufficient balance")
+
+    return AccountUsageSnapshot(
+        provider="deepseek",
+        source="balance_api",
+        fetched_at=_utc_now(),
+        details=tuple(details),
+        credit_balance=max(0.0, total),
+        credit_currency=currency,
     )
 
 
@@ -633,6 +712,8 @@ def fetch_account_usage(
             return _fetch_anthropic_account_usage()
         if normalized == "openrouter":
             return _fetch_openrouter_account_usage(base_url, api_key)
+        if normalized == "deepseek":
+            return _fetch_deepseek_account_usage(base_url, api_key)
     except Exception:
         return None
     return None

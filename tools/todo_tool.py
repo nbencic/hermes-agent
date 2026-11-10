@@ -252,6 +252,12 @@ TODO_SCHEMA = {
         "List order is priority. Only ONE item in_progress at a time.\n"
         "Mark items completed immediately when done. If something fails, "
         "cancel it and add a revised item.\n\n"
+        "Closing the loop (required): before you deliver your final "
+        "response, write the list one last time with every item set to "
+        "completed or cancelled. A list left with pending or in_progress "
+        "items when your turn ends is a bug — the user sees a stale tracker "
+        "and cannot tell finished work from abandoned work. This final write "
+        "is not optional.\n\n"
         "Always returns the full current list."
     ),
     "parameters": {
