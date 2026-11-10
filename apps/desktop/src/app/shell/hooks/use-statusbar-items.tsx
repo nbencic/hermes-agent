@@ -5,6 +5,7 @@ import { useCallback, useMemo } from 'react'
 import type { CommandCenterSection } from '@/app/command-center'
 import { $terminalTakeover, setTerminalTakeover } from '@/app/right-sidebar/store'
 import { GatewayMenuPanel } from '@/app/shell/gateway-menu-panel'
+import { useProviderCredit } from '@/app/shell/hooks/use-provider-credit'
 import { useI18n } from '@/i18n'
 import {
   Activity,
@@ -101,6 +102,9 @@ export function useStatusbarItems({
   const currentModel = useStore($currentModel)
   const currentProvider = useStore($currentProvider)
   const currentReasoningEffort = useStore($currentReasoningEffort)
+  // Remaining prepaid credit for the active provider, if it exposes one —
+  // prefixes the model chip ("19.11$ · DeepSeek Flash · Med").
+  const providerCredit = useProviderCredit(requestGateway, currentProvider)
   const currentUsage = useStore($currentUsage)
   const desktopActionTasks = useStore($desktopActionTasks)
   const previewServerRestartStatus = useStore($previewServerRestartStatus)
@@ -422,7 +426,9 @@ export function useStatusbarItems({
           <span className="inline-flex min-w-0 items-center gap-0.5">
             <span className="truncate">
               {formatModelStatusLabel(currentModel, {
+                credit: providerCredit,
                 fastMode: currentFastMode,
+                provider: currentProvider,
                 reasoningEffort: currentReasoningEffort
               })}
             </span>
@@ -470,6 +476,7 @@ export function useStatusbarItems({
       currentProvider,
       currentReasoningEffort,
       modelMenuContent,
+      providerCredit,
       sessionStartedAt,
       showYoloToggle,
       terminalTakeover,
