@@ -143,13 +143,6 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
     priority: 11
   },
   {
-    prefix: 'HF_',
-    name: 'Hugging Face',
-    description: 'Inference Providers — 20+ open models via router.huggingface.co',
-    docsUrl: 'https://huggingface.co/settings/tokens',
-    priority: 12
-  },
-  {
     prefix: 'OPENCODE_ZEN_',
     name: 'OpenCode Zen',
     description: 'Pay-as-you-go access to curated coding models',

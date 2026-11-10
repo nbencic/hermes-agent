@@ -108,10 +108,6 @@ class TestResolveProvider:
         assert parse_model_input("chatgpt-codex:gpt-5.5", "openrouter") == ("openai-codex", "gpt-5.5")
         assert _normalize_provider("chatgpt") == "openai-codex"
 
-    def test_alias_hf(self):
-        assert resolve_provider("hf") == "huggingface"
-
-
     def test_unknown_provider_raises(self):
         with pytest.raises(AuthError):
             resolve_provider("nonexistent-provider-xyz")
@@ -603,22 +599,6 @@ class TestKimiMoonshotModelListIsolation:
 # =============================================================================
 # Hugging Face provider model list tests
 # =============================================================================
-
-class TestHuggingFaceModels:
-    """Verify Hugging Face model lists are consistent across all locations."""
-
-
-    def test_model_metadata_has_context_lengths(self):
-        """Every HF model should have a context length entry."""
-        from hermes_cli.models import _PROVIDER_MODELS
-        from agent.model_metadata import DEFAULT_CONTEXT_LENGTHS
-        lower_keys = {k.lower() for k in DEFAULT_CONTEXT_LENGTHS}
-        hf_models = _PROVIDER_MODELS["huggingface"]
-        for model in hf_models:
-            assert model.lower() in lower_keys, (
-                f"HF model {model!r} missing from DEFAULT_CONTEXT_LENGTHS"
-            )
-
 
 # =============================================================================
 # NovitaAI provider tests (added by feat/add-novita-provider)

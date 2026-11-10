@@ -2789,10 +2789,6 @@ OPTIONAL_ENV_VARS = OptionalEnvVars({
     "OPENCODE_GO_API_KEY": _prov("OpenCode Go API key ($10/month subscription for open models)",
         "OpenCode Go API key", "https://opencode.ai/auth"),
     "OPENCODE_GO_BASE_URL": _base_url("OpenCode Go"),
-    "HF_TOKEN": _prov(
-        "Hugging Face token for Inference Providers (20+ open models via router.huggingface.co)",
-        "Hugging Face Token", "https://huggingface.co/settings/tokens", advanced=False),
-    "HF_BASE_URL": _base_url("Hugging Face Inference Providers", "HF"),
     "OLLAMA_API_KEY": _prov("Ollama Cloud API key (ollama.com — cloud-hosted open models)",
         "Ollama Cloud API key", "https://ollama.com/settings"),
     "OLLAMA_BASE_URL": _prov("Ollama Cloud base URL override (default: https://ollama.com/v1)",
