@@ -180,7 +180,7 @@ openrouter = OpenRouterProfile(
         "openai/gpt-5.4",
         "deepseek/deepseek-v4-flash",
         "google/gemini-3-flash-preview",
-        "qwen/qwen3-plus",
+        "qwen/qwen3.7-plus",
     ),
 )
 
