@@ -779,6 +779,7 @@ export function DesktopController() {
     requestGateway,
     resumeStoredSession: resumeSession,
     selectedStoredSessionIdRef,
+    sessionStateByRuntimeIdRef,
     startFreshSessionDraft,
     sttEnabled,
     updateSessionState

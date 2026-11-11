@@ -315,6 +315,8 @@ interface PromptActionsOptions {
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
   resumeStoredSession: (storedSessionId: string) => Promise<void> | void
   selectedStoredSessionIdRef: MutableRefObject<string | null>
+  /** runtime session id → live client state (carries that session's stored id). */
+  sessionStateByRuntimeIdRef?: MutableRefObject<Map<string, { storedSessionId: null | string }>>
   startFreshSessionDraft: () => void
   sttEnabled: boolean
   updateSessionState: (
@@ -390,6 +392,7 @@ export function usePromptActions({
   requestGateway,
   resumeStoredSession,
   selectedStoredSessionIdRef,
+  sessionStateByRuntimeIdRef,
   startFreshSessionDraft,
   sttEnabled,
   updateSessionState
@@ -709,13 +712,18 @@ export function usePromptActions({
           await withSessionBusyRetry(() => requestGateway('prompt.submit', { session_id: sessionId, text }))
         } catch (firstErr) {
           if (isSessionNotFoundError(firstErr) && selectedStoredSessionIdRef.current) {
-            // Recover the RIGHT conversation. The ref can lag a session switch
-            // (it is updated by an effect), and resuming a stale id re-attaches
-            // the run to whatever conversation was selected before — the prompt
-            // then executes in the wrong session (observed: prompt persisted in
-            // the new session while the turn ran in an old one). Prefer the
-            // store-of-record atom, which is written on the switch itself.
-            const recoveryStoredId = $selectedStoredSessionId.get() ?? selectedStoredSessionIdRef.current
+            // Recover the RIGHT conversation. The ref lags a session switch and
+            // the selected-session atom can point at a previously viewed chat,
+            // so resume the stored id belonging to the session we are actually
+            // submitting for — that mapping is authoritative (it is written
+            // when the runtime session is created/resumed). Falling back to the
+            // atom/ref re-attached the run to whatever conversation was viewed
+            // before, which is how a prompt ended up executing in a different
+            // session and left the wrong row "working" in the sidebar.
+            const recoveryStoredId =
+              sessionStateByRuntimeIdRef?.current.get(sessionId)?.storedSessionId ??
+              $selectedStoredSessionId.get() ??
+              selectedStoredSessionIdRef.current
             // Re-register the session in the gateway and get a fresh live ID.
             const resumed = await requestGateway<{ session_id: string }>('session.resume', {
               session_id: recoveryStoredId
