@@ -144,7 +144,10 @@ class SubdirectoryHintTracker:
                 if parent == p:
                     break  # filesystem root
                 p = parent
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
+            # RuntimeError: Path("~nosuchuser").expanduser() raises
+            # "Could not determine home directory." — a hint lookup must
+            # never abort the tool call that triggered it.
             pass
 
     def _extract_paths_from_command(self, cmd: str, candidates: Set[Path]):

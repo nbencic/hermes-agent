@@ -325,3 +325,24 @@ class TestOutsideWorkspaceRejection:
         outside.mkdir(exist_ok=True)
         tracker = SubdirectoryHintTracker(working_dir=str(project))
         assert tracker._is_valid_subdir(outside) is False
+
+
+class TestMalformedPaths:
+    """Hint discovery is best-effort and must never raise into the tool loop."""
+
+    def test_unknown_user_tilde_path_does_not_raise(self, project):
+        # Path("~nosuchuser").expanduser() raises RuntimeError("Could not
+        # determine home directory.") — this used to abort the whole tool call
+        # ("Outer loop error in API call").
+        tracker = SubdirectoryHintTracker(working_dir=str(project))
+        result = tracker.check_tool_call(
+            "read_file", {"path": "~definitely-not-a-user-zz/notes.md"}
+        )
+        assert not result
+
+    def test_unknown_user_tilde_in_terminal_command_does_not_raise(self, project):
+        tracker = SubdirectoryHintTracker(working_dir=str(project))
+        result = tracker.check_tool_call(
+            "terminal", {"command": "cat ~definitely-not-a-user-zz/x.txt"}
+        )
+        assert not result

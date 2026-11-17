@@ -727,7 +727,11 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             env=get_active_env(effective_task_id),
         ) if not _is_multimodal_tool_result(function_result) else function_result
 
-        subdir_hints = agent._subdirectory_hints.check_tool_call(name, args)
+        try:
+            subdir_hints = agent._subdirectory_hints.check_tool_call(name, args)
+        except Exception as hint_err:  # hints are best-effort; never fail the tool call
+            logging.debug(f"Subdirectory hint lookup failed: {hint_err}")
+            subdir_hints = ""
         if subdir_hints:
             if _is_multimodal_tool_result(function_result):
                 # Append the hint to the text summary part so the model
@@ -1366,7 +1370,11 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         ) if not _is_multimodal_tool_result(function_result) else function_result
 
         # Discover subdirectory context files from tool arguments
-        subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)
+        try:
+            subdir_hints = agent._subdirectory_hints.check_tool_call(function_name, function_args)
+        except Exception as hint_err:  # hints are best-effort; never fail the tool call
+            logging.debug(f"Subdirectory hint lookup failed: {hint_err}")
+            subdir_hints = ""
         if subdir_hints:
             if _is_multimodal_tool_result(function_result):
                 _append_subdir_hint_to_multimodal(function_result, subdir_hints)
