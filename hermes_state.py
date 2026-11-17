@@ -1330,14 +1330,34 @@ class SessionDB:
             )
         self._execute_write(_do)
 
-    def reopen_session(self, session_id: str) -> None:
-        """Clear ended_at/end_reason so a session can be resumed."""
+    def reopen_session(self, session_id: str) -> bool:
+        """Clear ended_at/end_reason so a session can be resumed.
+
+        Returns False (and leaves the row untouched) when ``session_id`` is a
+        compression parent that already has a continuation child. Clearing
+        ``end_reason='compression'`` there would make ``get_compression_tip``
+        blind to the child, so every later resume would fork the lineage.
+        Callers should resolve the target through
+        ``resolve_resume_session_id`` first and resume the tip instead.
+        """
         def _do(conn):
-            conn.execute(
+            guard = conn.execute(
+                "SELECT 1 FROM sessions p "
+                "WHERE p.id = ? AND p.end_reason = 'compression' "
+                "  AND EXISTS (SELECT 1 FROM sessions c "
+                "              WHERE c.parent_session_id = p.id "
+                "                AND c.started_at >= p.ended_at)",
+                (session_id,),
+            ).fetchone()
+            if guard is not None:
+                return 0
+            cursor = conn.execute(
                 "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
                 (session_id,),
             )
-        self._execute_write(_do)
+            return cursor.rowcount
+        rowcount = self._execute_write(_do)
+        return bool(rowcount)
 
     def update_session_cwd(self, session_id: str, cwd: str) -> None:
         """Persist the session working directory when a frontend knows it."""
@@ -2798,6 +2818,19 @@ class SessionDB:
         """
         if not session_id:
             return session_id
+
+        # Compression continuation first. The parent almost always holds
+        # messages (the turn-start flush writes to it before compression
+        # runs), so the zero-message walk below practically never fired and
+        # resumes landed on the ended parent — reopening it severed the
+        # chain and forked the lineage. Follow ``end_reason='compression'``
+        # children to the tip regardless of the parent's message count.
+        try:
+            tip = self.get_compression_tip(session_id)
+        except Exception:
+            tip = None
+        if tip and tip != session_id:
+            return tip
 
         with self._lock:
             # If this session already has messages, nothing to redirect.

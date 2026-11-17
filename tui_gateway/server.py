@@ -2257,6 +2257,18 @@ def _sync_session_key_after_compress(
         except Exception:
             pass
 
+    # Tell the client its stored id moved. Without this the desktop keeps
+    # selecting/working/queueing under the ended parent's id until the next
+    # sessions refresh, and resumes it after a reconnect.
+    try:
+        _emit(
+            "session.key_changed",
+            sid,
+            {"old_key": old_key, "new_key": new_session_id},
+        )
+    except Exception:
+        pass
+
 
 def _get_usage(agent) -> dict:
     g = lambda k, fb=None: getattr(agent, k, 0) or (getattr(agent, fb, 0) if fb else 0)
@@ -2423,6 +2435,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "branch": _git_branch_for_cwd(cwd),
         "personality": str(personality or ""),
         "running": bool((session or {}).get("running")),
+        "session_key": str((session or {}).get("session_key") or ""),
         "desktop_contract": DESKTOP_BACKEND_CONTRACT,
         "version": "",
         "release_date": "",
@@ -4086,6 +4099,19 @@ def _(rid, params: dict) -> dict:
             target = found["id"]
         else:
             return _err(rid, 4007, "session not found")
+    # Follow the compression chain to its tip. After an auto-compaction the
+    # client may still hold the ended parent's id (it is only told about the
+    # new key via session.key_changed, which it can miss across a reconnect);
+    # resuming the parent would reopen it and fork the lineage.
+    try:
+        resolved = db.resolve_resume_session_id(target)
+    except Exception:
+        resolved = target
+    if resolved and resolved != target:
+        resolved_row = db.get_session(resolved)
+        if resolved_row:
+            target = resolved
+            found = resolved_row
     profile_resume_cwd = str(found.get("cwd") or "").strip() or _profile_configured_cwd(
         profile_home
     )

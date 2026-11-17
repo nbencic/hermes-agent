@@ -47,6 +47,10 @@ export type GatewayEventPayload = {
   fast?: boolean
   yolo?: boolean
   running?: boolean
+  // session.key_changed / session.info — stored id of the live session
+  session_key?: string
+  old_key?: string
+  new_key?: string
   cwd?: string
   branch?: string
   credential_warning?: string

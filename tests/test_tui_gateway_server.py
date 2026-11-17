@@ -3448,6 +3448,36 @@ def test_session_compress_syncs_session_key_after_rotation(monkeypatch):
         server._sessions.pop("sid", None)
 
 
+def test_session_compress_emits_key_changed(monkeypatch):
+    """The client holds the stored id; after rotation it must be told the new
+    one or it keeps selecting/queueing under the ended parent and resumes it
+    after a reconnect (lineage fork)."""
+    agent = types.SimpleNamespace(session_id="rotated-id")
+    server._sessions["sid"] = _session(agent=agent)
+    server._sessions["sid"]["session_key"] = "old-key"
+
+    monkeypatch.setattr(
+        server,
+        "_compress_session_history",
+        lambda session, focus_topic=None, **_kw: (2, {"total": 42}),
+    )
+    monkeypatch.setattr(server, "_session_info", lambda _agent, *a: {"model": "x"})
+    monkeypatch.setattr(server, "_restart_slash_worker", lambda sid, s: None)
+
+    emitted = []
+    try:
+        with patch("tui_gateway.server._emit", side_effect=lambda *a: emitted.append(a)):
+            server.handle_request(
+                {"id": "1", "method": "session.compress", "params": {"session_id": "sid"}}
+            )
+        key_events = [e for e in emitted if e[0] == "session.key_changed"]
+        assert key_events == [
+            ("session.key_changed", "sid", {"old_key": "old-key", "new_key": "rotated-id"})
+        ]
+    finally:
+        server._sessions.pop("sid", None)
+
+
 def test_prompt_submit_sets_approval_session_key(monkeypatch):
     from tools.approval import get_current_session_key
 

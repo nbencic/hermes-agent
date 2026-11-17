@@ -91,6 +91,30 @@ export function stashSessionDraft(scope: string | null | undefined, text: string
   persistDraftTexts()
 }
 
+/** Re-key a stashed draft when the backend rotates a session's stored id. */
+export function moveSessionDraft(fromScope: string | null | undefined, toScope: string | null | undefined) {
+  const from = draftKey(fromScope)
+  const to = draftKey(toScope)
+
+  if (from === to) {
+    return
+  }
+
+  const stashed = draftsBySession.get(from)
+
+  if (!stashed) {
+    return
+  }
+
+  draftsBySession.delete(from)
+
+  if (!draftsBySession.has(to)) {
+    draftsBySession.set(to, stashed)
+  }
+
+  persistDraftTexts()
+}
+
 export function takeSessionDraft(scope: string | null | undefined): SessionDraft {
   const stashed = draftsBySession.get(draftKey(scope))
 

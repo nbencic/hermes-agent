@@ -21,6 +21,8 @@ import {
   normalizeSessionSource
 } from '../lib/session-source'
 import { latestSessionTodos } from '../lib/todos'
+import { moveSessionDraft } from '../store/composer'
+import { migrateQueuedPrompts } from '../store/composer-queue'
 import { setCronFocusJobId, setCronJobs } from '../store/cron'
 import {
   $panesFlipped,
@@ -72,6 +74,7 @@ import {
   setMessagingPlatformTotals,
   setMessagingSessions,
   setMessagingTruncated,
+  setSelectedStoredSessionId,
   setSessionProfileTotals,
   setSessions,
   setSessionsLoading,
@@ -628,9 +631,31 @@ export function DesktopController() {
     [activeSessionIdRef, selectedStoredSessionIdRef, updateSessionState]
   )
 
+  // Context compression rotates the stored id of a live session. Keep the
+  // selection, route, queued prompts and stashed draft on the continuation so
+  // the sidebar highlight / working dot do not vanish and a later resume does
+  // not reopen the ended parent (which forked the lineage).
+  const handleSessionKeyChanged = useCallback(
+    (_runtimeSessionId: string, oldKey: string, newKey: string) => {
+      migrateQueuedPrompts(oldKey, newKey)
+      moveSessionDraft(oldKey, newKey)
+
+      if (oldKey && selectedStoredSessionIdRef.current === oldKey) {
+        selectedStoredSessionIdRef.current = newKey
+        setSelectedStoredSessionId(newKey)
+      }
+
+      if (oldKey && routeSessionId(location.pathname) === oldKey) {
+        navigate(sessionRoute(newKey), { replace: true })
+      }
+    },
+    [location.pathname, navigate, selectedStoredSessionIdRef]
+  )
+
   const { handleGatewayEvent } = useMessageStream({
     activeSessionIdRef,
     hydrateFromStoredSession,
+    onSessionKeyChanged: handleSessionKeyChanged,
     queryClient,
     refreshHermesConfig,
     refreshSessions,

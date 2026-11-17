@@ -62,6 +62,11 @@ interface MessageStreamOptions {
     storedSessionId?: string | null,
     runtimeSessionId?: string | null
   ) => Promise<void>
+  /**
+   * The backend rotated a live session's stored id (context compression ends
+   * the parent row and continues in a child). The runtime id is unchanged.
+   */
+  onSessionKeyChanged?: (runtimeSessionId: string, oldKey: string, newKey: string) => void
   queryClient: QueryClient
   refreshHermesConfig: () => Promise<void>
   refreshSessions: () => Promise<void>
@@ -256,6 +261,7 @@ function delegateTaskPayloads(
 export function useMessageStream({
   activeSessionIdRef,
   hydrateFromStoredSession,
+  onSessionKeyChanged,
   queryClient,
   refreshHermesConfig,
   refreshSessions,
@@ -724,6 +730,22 @@ export function useMessageStream({
 
       if (event.type === 'gateway.ready') {
         return
+      } else if (event.type === 'session.key_changed') {
+        const oldKey = typeof payload?.old_key === 'string' ? payload.old_key : ''
+        const newKey = typeof payload?.new_key === 'string' ? payload.new_key : ''
+
+        if (!sessionId || !newKey || newKey === oldKey) {
+          return
+        }
+
+        // Rebind the runtime state to the continuation id: this also moves the
+        // stored→runtime map entry and the sidebar working flag off the ended
+        // parent (ensureSessionState handles both).
+        updateSessionState(sessionId, state => state, newKey)
+        onSessionKeyChanged?.(sessionId, oldKey, newKey)
+        void refreshSessions()
+
+        return
       } else if (event.type === 'session.info') {
         // Apply session-scoped fields when the event targets the active
         // session, OR when it's a global broadcast and we have no session.
@@ -1127,8 +1149,10 @@ export function useMessageStream({
       completeAssistantMessage,
       failAssistantMessage,
       flushQueuedDeltas,
+      onSessionKeyChanged,
       queryClient,
       refreshHermesConfig,
+      refreshSessions,
       sessionInterrupted,
       updateSessionState,
       upsertToolCall

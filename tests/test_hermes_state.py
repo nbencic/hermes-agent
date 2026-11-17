@@ -3024,6 +3024,37 @@ class TestCompressionChainProjection:
         # root1's tip must be tip1 (via mid1), not delegate1.
         assert db.get_compression_tip("root1") == "tip1"
 
+    def test_resolve_resume_follows_chain_even_when_parent_has_messages(self, db):
+        """The turn-start flush writes to the parent before compression runs,
+        so a compression parent practically always has messages. Resume must
+        still land on the tip (31 of 35 parents in a real state.db held
+        messages and were being resumed directly, forking the lineage).
+        """
+        import time as _time
+        self._build_compression_chain(db, _time.time() - 3600)
+        assert db.get_messages("root1"), "fixture parent should hold messages"
+        assert db.resolve_resume_session_id("root1") == "tip1"
+        assert db.resolve_resume_session_id("mid1") == "tip1"
+        assert db.resolve_resume_session_id("tip1") == "tip1"
+
+    def test_reopen_refuses_compression_parent_with_continuation(self, db):
+        """Reopening the parent would null end_reason='compression' and make
+        get_compression_tip blind to the child forever."""
+        import time as _time
+        self._build_compression_chain(db, _time.time() - 3600)
+        assert db.reopen_session("root1") is False
+        row = db.get_session("root1")
+        assert row["end_reason"] == "compression"
+        assert row["ended_at"] is not None
+        assert db.get_compression_tip("root1") == "tip1"
+
+    def test_reopen_still_works_for_ordinary_ended_session(self, db):
+        db.create_session("plain", "cli")
+        db.end_session("plain", "user_exit")
+        assert db.reopen_session("plain") is True
+        row = db.get_session("plain")
+        assert row["ended_at"] is None and row["end_reason"] is None
+
     def test_list_surfaces_tip_for_compressed_root(self, db):
         """The list must show the tip's id/message_count/preview in place of
         the root row, so users can see and resume the live conversation.

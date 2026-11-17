@@ -5,6 +5,7 @@ import {
   addComposerAttachment,
   clearSessionDraft,
   type ComposerAttachment,
+  moveSessionDraft,
   removeComposerAttachment,
   SESSION_DRAFTS_STORAGE_KEY,
   stashSessionDraft,
@@ -102,5 +103,22 @@ describe('session drafts', () => {
     taken.attachments[0]!.label = 'mutated'
 
     expect(takeSessionDraft('session-a').attachments[0]?.label).toBe('doc.pdf')
+  })
+})
+
+describe('moveSessionDraft (stored id rotation after compression)', () => {
+  it('re-keys a stashed draft to the continuation id', () => {
+    stashSessionDraft('parent-id', 'half-typed prompt', [])
+    moveSessionDraft('parent-id', 'child-id')
+    expect(takeSessionDraft('parent-id').text).toBe('')
+    expect(takeSessionDraft('child-id').text).toBe('half-typed prompt')
+  })
+
+  it('does not clobber a draft already stashed under the new id', () => {
+    stashSessionDraft('p2', 'old', [])
+    stashSessionDraft('c2', 'newer', [])
+    moveSessionDraft('p2', 'c2')
+    expect(takeSessionDraft('c2').text).toBe('newer')
+    expect(takeSessionDraft('p2').text).toBe('')
   })
 })
