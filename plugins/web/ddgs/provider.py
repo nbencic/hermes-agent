@@ -20,6 +20,14 @@ from agent.web_search_provider import WebSearchProvider
 logger = logging.getLogger(__name__)
 
 
+def _is_no_results_error(exc: BaseException) -> bool:
+    """True when ddgs signalled an empty result set rather than a failure."""
+    msg = str(exc).lower()
+    if "no results" in msg:
+        return True
+    return type(exc).__name__ == "DDGSException" and ("result" in msg and "found" in msg)
+
+
 class DDGSWebSearchProvider(WebSearchProvider):
     """DuckDuckGo HTML-scrape search provider.
 
@@ -86,6 +94,20 @@ class DDGSWebSearchProvider(WebSearchProvider):
                         }
                     )
         except Exception as exc:  # noqa: BLE001 — ddgs raises its own exceptions
+            if _is_no_results_error(exc):
+                # ddgs raises DDGSException("No results found") for an empty
+                # result set. That is a valid answer, not a tool failure: an
+                # error here made the model retry the same query verbatim
+                # (174 of 210 web_search failures in a week of logs).
+                logger.info("DDGS search '%s': 0 results (limit %d)", query, limit)
+                return {
+                    "success": True,
+                    "data": {"web": []},
+                    "note": (
+                        "No results for this query. Try fewer or different "
+                        "keywords, or drop quotes/operators."
+                    ),
+                }
             logger.warning("DDGS search error: %s", exc)
             return {"success": False, "error": f"DuckDuckGo search failed: {exc}"}
 

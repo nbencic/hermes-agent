@@ -147,6 +147,16 @@ class TestDDGSProviderSearch:
         assert result["success"] is False
         assert "rate limited" in result["error"] or "failed" in result["error"].lower()
 
+    def test_no_results_exception_is_success_with_note(self, monkeypatch):
+        # ddgs raises DDGSException("No results found") for an empty set.
+        _install_fake_ddgs(monkeypatch, text_raises=Exception("No results found"))
+        from plugins.web.ddgs.provider import DDGSWebSearchProvider
+
+        result = DDGSWebSearchProvider().search("qzxv unlikely", limit=5)
+        assert result["success"] is True
+        assert result["data"]["web"] == []
+        assert "No results" in result["note"]
+
     def test_empty_results(self, monkeypatch):
         _install_fake_ddgs(monkeypatch, text_results=[])
         from plugins.web.ddgs.provider import DDGSWebSearchProvider
