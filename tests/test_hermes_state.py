@@ -3055,6 +3055,29 @@ class TestCompressionChainProjection:
         row = db.get_session("plain")
         assert row["ended_at"] is None and row["end_reason"] is None
 
+    def test_rotate_session_for_compression_is_one_step(self, db):
+        db.create_session("parent", "cli", model="m1")
+        db.set_session_title("parent", "my chat")
+        db.append_message("parent", "user", "hello")
+        new_title = db.rotate_session_for_compression(
+            "parent", "child", source="cli", model="m1", system_prompt="SYS"
+        )
+        parent = db.get_session("parent")
+        child = db.get_session("child")
+        assert parent["end_reason"] == "compression" and parent["ended_at"] is not None
+        assert child["parent_session_id"] == "parent"
+        assert child["started_at"] >= parent["ended_at"]
+        assert child["system_prompt"] == "SYS"
+        assert new_title == "my chat #2" and child["title"] == "my chat #2"
+        assert db.get_compression_tip("parent") == "child"
+        assert db.resolve_resume_session_id("parent") == "child"
+
+    def test_rotate_session_for_compression_without_title(self, db):
+        db.create_session("p0", "cli")
+        assert db.rotate_session_for_compression("p0", "c0", source="cli") is None
+        assert db.get_session("c0")["title"] is None
+        assert db.get_compression_tip("p0") == "c0"
+
     def test_list_surfaces_tip_for_compressed_root(self, db):
         """The list must show the tip's id/message_count/preview in place of
         the root row, so users can see and resume the live conversation.

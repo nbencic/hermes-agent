@@ -1943,11 +1943,19 @@ class SessionDB:
         # Escape SQL LIKE wildcards (%, _) in the base to prevent false matches
         escaped = base.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         with self._lock:
-            cursor = self._conn.execute(
-                "SELECT title FROM sessions WHERE title = ? OR title LIKE ? ESCAPE '\\'",
-                (base, f"{escaped} #%"),
-            )
-            existing = [row["title"] for row in cursor.fetchall()]
+            return self._next_title_in_lineage_on(self._conn, base_title)
+
+    @staticmethod
+    def _next_title_in_lineage_on(conn, base_title: str) -> str:
+        """Lineage title numbering on an explicit connection (txn-safe)."""
+        match = re.match(r'^(.*?) #(\d+)$', base_title)
+        base = match.group(1) if match else base_title
+        escaped = base.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        cursor = conn.execute(
+            "SELECT title FROM sessions WHERE title = ? OR title LIKE ? ESCAPE '\\'",
+            (base, f"{escaped} #%"),
+        )
+        existing = [row["title"] for row in cursor.fetchall()]
 
         if not existing:
             return base  # No conflict, use the base name as-is
@@ -1960,6 +1968,86 @@ class SessionDB:
                 max_num = max(max_num, int(m.group(1)))
 
         return f"{base} #{max_num + 1}"
+
+    def rotate_session_for_compression(
+        self,
+        old_session_id: str,
+        new_session_id: str,
+        *,
+        source: str,
+        model: str = None,
+        model_config: Dict[str, Any] = None,
+        system_prompt: str = None,
+        cwd: str = None,
+    ) -> Optional[str]:
+        """End ``old_session_id`` with reason 'compression' and create the
+        continuation ``new_session_id`` in ONE transaction.
+
+        The previous end → create → title → system_prompt sequence ran as four
+        separate transactions; a failure after end_session left the parent
+        closed, the agent pointing at a row-less id and the lineage link lost
+        (the next flush recreated the row with the agent's original parent).
+        Either everything lands or nothing does. ``started_at`` of the child is
+        set to the parent's ``ended_at`` so ``get_compression_tip``'s
+        ``started_at >= ended_at`` guard holds even on coarse clocks.
+
+        Returns the title given to the continuation (or None).
+        """
+        def _do(conn):
+            now = time.time()
+            conn.execute(
+                "UPDATE sessions SET ended_at = ?, end_reason = 'compression' "
+                "WHERE id = ? AND ended_at IS NULL",
+                (now, old_session_id),
+            )
+            row = conn.execute(
+                "SELECT title, user_id, cwd, ended_at FROM sessions WHERE id = ?",
+                (old_session_id,),
+            ).fetchone()
+            if row is None:
+                # The agent held a session id whose row was never written
+                # (first flush had not happened yet). Record a minimal ended
+                # parent so the FK and the compression chain still hold.
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions (id, source, started_at, ended_at, end_reason) "
+                    "VALUES (?, ?, ?, ?, 'compression')",
+                    (old_session_id, source, now, now),
+                )
+                row = conn.execute(
+                    "SELECT title, user_id, cwd, ended_at FROM sessions WHERE id = ?",
+                    (old_session_id,),
+                ).fetchone()
+            old_title = row["title"] if row else None
+            user_id = row["user_id"] if row else None
+            inherited_cwd = cwd or (row["cwd"] if row else None)
+            started_at = max(now, float(row["ended_at"] or now)) if row else now
+            new_title = None
+            if old_title:
+                try:
+                    new_title = self.sanitize_title(
+                        self._next_title_in_lineage_on(conn, old_title)
+                    )
+                except Exception:
+                    new_title = None
+            conn.execute(
+                """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
+                   system_prompt, parent_session_id, cwd, started_at, title)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    new_session_id,
+                    source,
+                    user_id,
+                    model,
+                    json.dumps(model_config) if model_config else None,
+                    system_prompt,
+                    old_session_id,
+                    inherited_cwd,
+                    started_at,
+                    new_title,
+                ),
+            )
+            return new_title
+        return self._execute_write(_do)
 
     def get_compression_tip(self, session_id: str) -> Optional[str]:
         """Walk the compression-continuation chain forward and return the tip.

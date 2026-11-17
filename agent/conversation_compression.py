@@ -507,14 +507,36 @@ def compress_context(
     agent._cached_system_prompt = new_system_prompt
 
     if agent._session_db:
+        # Trigger memory extraction on the old session before it rotates.
         try:
-            # Propagate title to the new session with auto-numbering
-            old_title = agent._session_db.get_session_title(agent.session_id)
-            # Trigger memory extraction on the old session before it rotates.
             agent.commit_memory_session(messages)
-            agent._session_db.end_session(agent.session_id, "compression")
-            old_session_id = agent.session_id
-            agent.session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        except Exception as e:
+            logger.debug("commit_memory_session before compression split failed: %s", e)
+        old_session_id = agent.session_id
+        new_session_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        rotated = False
+        try:
+            # End parent + create continuation (+ title, system prompt) in ONE
+            # transaction. Only after it commits does the agent switch ids, so
+            # a failed rotation leaves the parent open and the agent writing to
+            # it — never a row-less id with a severed lineage.
+            agent._session_db.rotate_session_for_compression(
+                old_session_id,
+                new_session_id,
+                source=agent.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+                model=agent.model,
+                model_config=agent._session_init_model_config,
+                system_prompt=new_system_prompt,
+            )
+            rotated = True
+        except Exception as e:
+            logger.warning(
+                "Session DB compression split failed — staying on session %s: %s",
+                old_session_id, e,
+            )
+        if rotated:
+            agent.session_id = new_session_id
+            agent._session_db_created = True
             # Ordering contract: the agent thread updates the contextvar here;
             # the gateway propagates to SessionEntry after run_in_executor returns.
             try:
@@ -538,27 +560,8 @@ def compress_context(
                 set_session_context(agent.session_id)
             except Exception:
                 pass
-            agent._session_db_created = False
-            agent._session_db.create_session(
-                session_id=agent.session_id,
-                source=agent.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
-                model=agent.model,
-                model_config=agent._session_init_model_config,
-                parent_session_id=old_session_id,
-            )
-            agent._session_db_created = True
-            # Auto-number the title for the continuation session
-            if old_title:
-                try:
-                    new_title = agent._session_db.get_next_title_in_lineage(old_title)
-                    agent._session_db.set_session_title(agent.session_id, new_title)
-                except (ValueError, Exception) as e:
-                    logger.debug("Could not propagate title on compression: %s", e)
-            agent._session_db.update_system_prompt(agent.session_id, new_system_prompt)
             # Reset flush cursor — new session starts with no messages written
             agent._last_flushed_db_idx = 0
-        except Exception as e:
-            logger.warning("Session DB compression split failed — new session will NOT be indexed: %s", e)
 
     # Notify the context engine that the session_id rotated because of
     # compression (not a fresh /new). Plugin engines (e.g. hermes-lcm) use
