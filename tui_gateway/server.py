@@ -2342,7 +2342,19 @@ def _probe_config_health(cfg: dict) -> str:
     if not isinstance(cfg, dict):
         return ""
     warnings: list[str] = []
-    null_keys = sorted(k for k, v in cfg.items() if v is None)
+    # Only a key that is a *section* (a dict in the defaults) or an unknown
+    # key is suspicious when None. Scalar settings whose default is None
+    # (max_concurrent_sessions: null — written by `hermes setup` itself) are
+    # legitimate and were flagged on every start (88× in a week of logs).
+    try:
+        from hermes_cli.config import DEFAULT_CONFIG as _defaults
+    except Exception:
+        _defaults = {}
+    null_keys = sorted(
+        k
+        for k, v in cfg.items()
+        if v is None and (k not in _defaults or isinstance(_defaults.get(k), dict))
+    )
     if not null_keys:
         pass
     else:

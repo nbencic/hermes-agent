@@ -2797,3 +2797,20 @@ class TestFallbackModelInheritance(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHighConcurrencyWarningOnce(unittest.TestCase):
+    def test_warns_once_per_process(self):
+        import logging
+        import tools.delegate_tool as dt
+
+        dt._warned_high_concurrency = False
+        with patch.object(dt, "_load_config", return_value={"max_concurrent_children": 15}):
+            with self.assertLogs(dt.logger, level=logging.WARNING) as captured:
+                self.assertEqual(dt._get_max_concurrent_children(), 15)
+            self.assertEqual(len([m for m in captured.output if "multiply cost" in m]), 1)
+            # Second call: no new warning.
+            with patch.object(dt.logger, "warning") as warn:
+                self.assertEqual(dt._get_max_concurrent_children(), 15)
+                warn.assert_not_called()
+        dt._warned_high_concurrency = False

@@ -1286,7 +1286,12 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     # slices so we can fire activity heartbeats every ~10s to the agent's
     # inactivity tracker — otherwise the gateway watchdog kills the agent
     # while the user is still responding. Mirrors _wait_for_process() cadence.
-    timeout = _get_approval_config().get("gateway_timeout", 300)
+    # Gateway dialogs use approvals.gateway_timeout when set, else the user's
+    # approvals.timeout, else 5 min. Previously the configured `timeout` was
+    # ignored here, so a user with `timeout: 60` still saw gateway prompts
+    # hang for 300 s before being denied.
+    _acfg = _get_approval_config()
+    timeout = _acfg.get("gateway_timeout", _acfg.get("timeout", 300))
     try:
         timeout = int(timeout)
     except (ValueError, TypeError):

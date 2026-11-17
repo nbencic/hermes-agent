@@ -250,6 +250,16 @@ def test_probe_config_health_flags_null_sections():
     assert "model" not in msg
 
 
+def test_probe_config_health_ignores_null_scalar_settings():
+    """`max_concurrent_sessions: null` is a scalar whose default IS None (hermes
+    setup writes it); it must not be reported as an empty section."""
+    from tui_gateway.server import _probe_config_health
+
+    assert _probe_config_health({"max_concurrent_sessions": None, "agent": {}}) == ""
+    # A truly unknown bare key is still flagged.
+    assert "mystery" in _probe_config_health({"mystery": None})
+
+
 def test_probe_config_health_flags_null_personalities_with_active_personality():
     from tui_gateway.server import _probe_config_health
 

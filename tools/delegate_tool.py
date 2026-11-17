@@ -359,6 +359,9 @@ def _normalize_role(r: Optional[str]) -> str:
     return "leaf"
 
 
+_warned_high_concurrency = False
+
+
 def _get_max_concurrent_children() -> int:
     """Read delegation.max_concurrent_children from config, falling back to
     DELEGATION_MAX_CONCURRENT_CHILDREN env var, then the default (3).
@@ -373,7 +376,11 @@ def _get_max_concurrent_children() -> int:
     if val is not None:
         try:
             result = max(1, int(val))
-            if result > 10:
+            global _warned_high_concurrency
+            if result > 10 and not _warned_high_concurrency:
+                # Once per process: this helper runs on every delegate call and
+                # produced ~570 identical warnings in a week of logs.
+                _warned_high_concurrency = True
                 logger.warning(
                     "delegation.max_concurrent_children=%d: each child consumes API tokens "
                     "independently. High values multiply cost linearly.",
