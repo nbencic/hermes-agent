@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import os
 import logging
 import socket
 from typing import Any
@@ -38,6 +39,31 @@ _log = logging.getLogger(__name__)
 # to flush a WS frame before we mark the transport dead. Protects handler
 # threads from a wedged socket.
 _WS_WRITE_TIMEOUT_S = 10.0
+
+# RPCs that must never wait behind another request on the same socket. The
+# receive loop dispatches inline handlers strictly in order (one at a time), so
+# a slow call — approval.respond or session.undo blocking in _wait_agent(30 s),
+# a full session.history read — queued every later frame behind it, including
+# the user's Stop. These control/read-only methods run as their own tasks,
+# bounded per connection; everything else keeps the ordered serial lane.
+_WS_CONCURRENT_METHODS = frozenset(
+    {
+        "approval.respond",
+        "clarify.respond",
+        "complete.path",
+        "secret.respond",
+        "session.history",
+        "session.interrupt",
+        "setup.runtime_check",
+        "sudo.respond",
+    }
+)
+try:
+    _WS_MAX_CONCURRENT_PER_CONN = max(
+        1, int(os.environ.get("HERMES_TUI_WS_CONCURRENT_RPCS") or "8")
+    )
+except (TypeError, ValueError):
+    _WS_MAX_CONCURRENT_PER_CONN = 8
 _WS_LOG_PAYLOAD_PREVIEW = 240
 
 # Keep starlette optional at import time; handle_ws uses the real class when
@@ -179,6 +205,93 @@ async def handle_ws(ws: Any) -> None:
     dispatch_crashes = 0
     send_failures = 0
     disconnect_reason = "not_connected"
+    side_tasks: set[asyncio.Task] = set()
+    side_sem = asyncio.Semaphore(_WS_MAX_CONCURRENT_PER_CONN)
+    serial_queue: asyncio.Queue = asyncio.Queue()
+    serial_task: asyncio.Task | None = None
+
+    async def _fail_connection(reason: str) -> None:
+        # A response could not be written: the socket is gone. Closing the
+        # websocket makes receive_text() raise in the read loop so the
+        # connection tears down through the normal finally path.
+        nonlocal disconnect_reason
+        disconnect_reason = reason
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+    async def _serial_worker() -> None:
+        """Ordered lane: one inline RPC at a time, in arrival order."""
+        nonlocal dispatch_crashes, send_failures
+        while True:
+            req, req_id, req_method = await serial_queue.get()
+            try:
+                resp = await asyncio.to_thread(server.dispatch, req, transport)
+            except Exception:
+                dispatch_crashes += 1
+                _log.exception(
+                    "ws dispatch crash peer=%s id=%s method=%s",
+                    peer,
+                    req_id,
+                    req_method,
+                )
+                ok = await transport.write_async(
+                    {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32603, "message": "internal error"},
+                        "id": req_id if req_id is not None else None,
+                    }
+                )
+                if not ok:
+                    send_failures += 1
+                    _log.warning(
+                        "ws dispatch-crash reply send failed peer=%s id=%s method=%s",
+                        peer,
+                        req_id,
+                        req_method,
+                    )
+                    await _fail_connection("send_failed_after_dispatch_crash")
+                    return
+                continue
+            if resp is not None and not await transport.write_async(resp):
+                send_failures += 1
+                _log.warning(
+                    "ws response send failed peer=%s id=%s method=%s",
+                    peer,
+                    req_id,
+                    req_method,
+                )
+                await _fail_connection("send_failed_after_response")
+                return
+
+    async def _dispatch_concurrent(req: dict, req_id, req_method: str) -> None:
+        nonlocal dispatch_crashes, send_failures
+        async with side_sem:
+            try:
+                resp = await asyncio.to_thread(server.dispatch, req, transport)
+            except Exception:
+                dispatch_crashes += 1
+                _log.exception(
+                    "ws dispatch crash peer=%s id=%s method=%s",
+                    peer,
+                    req_id,
+                    req_method,
+                )
+                resp = {
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32603, "message": "internal error"},
+                    "id": req_id,
+                }
+            if resp is not None and transport is not None:
+                if not await transport.write_async(resp):
+                    send_failures += 1
+                    _log.warning(
+                        "ws response send failed peer=%s id=%s method=%s",
+                        peer,
+                        req_id,
+                        req_method,
+                    )
 
     try:
         await ws.accept()
@@ -254,51 +367,31 @@ async def handle_ws(ws: Any) -> None:
             # dispatch() may schedule long handlers on the pool; it returns
             # None in that case and the worker writes the response itself via
             # the transport we pass in (a separate thread, so transport.write
-            # is the safe path there). For inline handlers it returns the
-            # response dict, which we write here from the loop.
+            # is the safe path there). Inline handlers return the response
+            # dict. Neither runs on this read loop any more: ordered requests
+            # go to the per-connection serial worker, control RPCs to their
+            # own task, so a slow handler can never stop us reading the next
+            # frame (the user's Stop, an approval reply).
             req_id = req.get("id") if isinstance(req, dict) else None
             req_method = req.get("method") if isinstance(req, dict) else None
-            try:
-                resp = await asyncio.to_thread(server.dispatch, req, transport)
-            except Exception:
-                dispatch_crashes += 1
-                _log.exception(
-                    "ws dispatch crash peer=%s id=%s method=%s",
-                    peer,
-                    req_id,
-                    req_method,
-                )
-                ok = await transport.write_async(
-                    {
-                        "jsonrpc": "2.0",
-                        "error": {"code": -32603, "message": "internal error"},
-                        "id": req_id if req_id is not None else None,
-                    }
-                )
-                if not ok:
-                    disconnect_reason = "send_failed_after_dispatch_crash"
-                    send_failures += 1
-                    _log.warning(
-                        "ws dispatch-crash reply send failed peer=%s id=%s method=%s",
-                        peer,
-                        req_id,
-                        req_method,
-                    )
-                    break
+            if req_method in _WS_CONCURRENT_METHODS:
+                task = asyncio.create_task(_dispatch_concurrent(req, req_id, req_method))
+                side_tasks.add(task)
+                task.add_done_callback(side_tasks.discard)
                 continue
-            if resp is not None and not await transport.write_async(resp):
-                disconnect_reason = "send_failed_after_response"
-                send_failures += 1
-                _log.warning(
-                    "ws response send failed peer=%s id=%s method=%s",
-                    peer,
-                    req_id,
-                    req_method,
-                )
-                break
+            serial_queue.put_nowait((req, req_id, req_method))
+            if serial_task is None or serial_task.done():
+                serial_task = asyncio.create_task(_serial_worker())
     finally:
         reaped_sessions = 0
         detached_sessions = 0
+        pending_tasks = list(side_tasks)
+        if serial_task is not None:
+            pending_tasks.append(serial_task)
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
         if transport is not None:
             transport.close()
 

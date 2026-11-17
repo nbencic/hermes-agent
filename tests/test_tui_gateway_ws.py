@@ -126,3 +126,54 @@ def test_ws_write_loop_stall_does_not_latch_transport(monkeypatch):
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2)
         loop.close()
+
+
+def test_ws_control_rpc_is_not_blocked_by_slow_inline_request(monkeypatch):
+    """session.interrupt (and approval replies) must not queue behind a slow
+    inline RPC on the same socket — that is how Stop used to wait up to 30 s
+    behind an approval.respond stuck in _wait_agent."""
+    monkeypatch.setattr(server, "_WS_ORPHAN_REAP_GRACE_S", 0)
+    sent: list[dict] = []
+
+    def fake_dispatch(req, transport=None):
+        if req["method"] == "slow.op":
+            time.sleep(0.4)
+        return {"jsonrpc": "2.0", "id": req["id"], "result": req["method"]}
+
+    monkeypatch.setattr(server, "dispatch", fake_dispatch)
+
+    frames = [
+        '{"jsonrpc":"2.0","id":1,"method":"slow.op"}',
+        '{"jsonrpc":"2.0","id":2,"method":"session.interrupt"}',
+    ]
+
+    class FakeWS:
+        async def accept(self):
+            pass
+
+        async def send_text(self, line):
+            import json as _json
+            sent.append(_json.loads(line))
+
+        async def receive_text(self):
+            if frames:
+                return frames.pop(0)
+            # Hold the socket open until both responses have gone out.
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                if len([f for f in sent if "id" in f]) >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            raise ws_mod._WebSocketDisconnect()
+
+        async def close(self):
+            pass
+
+    server._sessions.clear()
+    try:
+        asyncio.run(ws_mod.handle_ws(FakeWS()))
+    finally:
+        server._sessions.clear()
+
+    responses = [f["id"] for f in sent if "id" in f]
+    assert responses == [2, 1], responses
