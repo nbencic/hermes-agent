@@ -186,8 +186,27 @@ export class JsonRpcGatewayClient {
   }
 
   close(): void {
-    this.socket?.close()
+    const socket = this.socket
+    // Null the socket first: the 'close' listener registered in connect()
+    // early-returns once `this.socket !== socket`, so without doing the state
+    // transition and the pending rejection here, an explicit close() left
+    // connectionState 'open' and every in-flight request() hanging until its
+    // timeout (prune/unmount paths hit this).
     this.socket = null
+
+    if (socket) {
+      try {
+        socket.close()
+      } catch {
+        // ignore: already closing/closed
+      }
+    }
+
+    if (this.state !== 'idle') {
+      this.setState('closed')
+    }
+
+    this.rejectAllPending(new Error(this.options.closedErrorMessage))
   }
 
   on<P = unknown>(type: GatewayEventName, handler: (event: GatewayEvent<P>) => void): () => void {

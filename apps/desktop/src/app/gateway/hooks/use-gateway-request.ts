@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useRef } from 'react'
 
 import type { HermesGateway } from '@/hermes'
+import { shouldRetryGatewayRequest } from '@/lib/gateway-retry'
 import { isGatewayReauthRequired, resolveGatewayWsUrl } from '@/lib/gateway-ws-url'
 import { $gateway, ensureActiveGatewayOpen, isActivePrimary } from '@/store/gateway'
 import { $activeGatewayProfile } from '@/store/profile'
@@ -106,7 +107,7 @@ export function useGatewayRequest() {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
 
-        if (!/not connected|connection closed/i.test(message)) {
+        if (!shouldRetryGatewayRequest(method, message)) {
           throw error
         }
 
