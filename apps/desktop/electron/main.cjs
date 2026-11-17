@@ -2915,6 +2915,19 @@ function getLinkTitleSession() {
   linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
     callback({ cancel: RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType) })
   })
+  // A link that points at a binary (e.g. a Hugging Face `/resolve/` asset
+  // served with `Content-Disposition: attachment`) turns the hidden window's
+  // main-frame navigation into a download. Without a handler Electron falls
+  // back to the native "Save As" dialog — on top of the user's chat. Cancel it;
+  // the title job then settles with '' via did-fail-load or its hard timer.
+  linkTitleSession.on('will-download', (event, item) => {
+    event.preventDefault()
+    try {
+      rememberLog(`[link-title] cancelled download for ${item.getURL()}`)
+    } catch {
+      // item may already be gone; the cancel is what matters.
+    }
+  })
   return linkTitleSession
 }
 

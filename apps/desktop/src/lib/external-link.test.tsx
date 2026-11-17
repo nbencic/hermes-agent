@@ -59,6 +59,16 @@ describe('external link helpers', () => {
     expect(isTitleFetchable('mailto:hello@example.com')).toBe(false)
   })
 
+  it('does not fetch titles for links to binary files (would trigger a download)', () => {
+    expect(isTitleFetchable('https://huggingface.co/feder-cr/jev/resolve/main/assets/jevos_vs_jev_snake.mp4')).toBe(false)
+    expect(isTitleFetchable('https://huggingface.co/x/y/resolve/main/panels/hero.webp')).toBe(false)
+    expect(isTitleFetchable('https://example.com/model.Q6_K.gguf')).toBe(false)
+    expect(isTitleFetchable('https://example.com/report.PDF?dl=1')).toBe(false)
+    expect(isTitleFetchable('https://huggingface.co/feder-cr/jev/blob/main/assets/jevos_vs_jev_snake.mp4')).toBe(false)
+    expect(isTitleFetchable('https://huggingface.co/feder-cr/jev')).toBe(true)
+    expect(isTitleFetchable('https://example.com/docs/index.html')).toBe(true)
+  })
+
   it('deduplicates in-flight title fetches and caches results', async () => {
     const bridge = vi.fn().mockResolvedValue('El Yunque Tour Water Slide, Rope Swing & Pickup')
     installDesktopBridge({ fetchLinkTitle: bridge as unknown as Window['hermesDesktop']['fetchLinkTitle'] })

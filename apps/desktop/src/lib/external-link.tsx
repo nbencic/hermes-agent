@@ -22,6 +22,12 @@ const DOMAIN_RE = /^(?:www\.)?[a-z0-9](?:[a-z0-9-]*\.)+[a-z]{2,}(?::\d+)?(?:[/?#
 const SKIP_PROTO_RE = /^(?:file|data|mailto|javascript|blob|chrome|about|hermes):/i
 const LOCAL_HOST_RE = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?$/i
 
+// Links to binaries never have an HTML <title>, and loading one in the hidden
+// title window would turn into a download (and a native Save dialog) when the
+// host serves it as an attachment. Decide from the path extension and skip.
+const BINARY_PATH_RE =
+  /\.(?:7z|aac|apk|avi|bin|bz2|csv|dmg|doc|docx|exe|flac|gguf|gif|gz|ico|iso|jpe?g|m4a|mkv|mov|mp3|mp4|msi|ogg|ogv|onnx|parquet|pdf|pkg|png|ppt|pptx|pt|pth|rar|safetensors|svg|tar|tgz|tsv|wav|webm|webp|xls|xlsx|xz|zip)$/i
+
 const ERROR_TITLE_RE =
   /\b(?:access denied|attention required|captcha|error|forbidden|just a moment|request blocked|too many requests)\b/i
 
@@ -118,7 +124,9 @@ export function isTitleFetchable(value: string): boolean {
 
   const url = parseUrl(value)
 
-  return Boolean(url && /^https?:$/.test(url.protocol) && !LOCAL_HOST_RE.test(url.host))
+  return Boolean(
+    url && /^https?:$/.test(url.protocol) && !LOCAL_HOST_RE.test(url.host) && !BINARY_PATH_RE.test(url.pathname)
+  )
 }
 
 export function fetchLinkTitle(url: string): Promise<string> {
