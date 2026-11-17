@@ -2008,6 +2008,17 @@ def _run_single_child(
             except (ValueError, UnboundLocalError) as e:
                 logger.debug("Could not remove child from active_children: %s", e)
 
+        # Mark the child's DB session ended. Children were never closed in
+        # state.db (every 'subagent' row stayed open forever), which pollutes
+        # open-session views, active-session accounting and TTL/prune logic.
+        try:
+            _child_db = getattr(child, "_session_db", None)
+            _child_sid = getattr(child, "session_id", None)
+            if _child_db is not None and _child_sid and getattr(child, "_session_db_created", False):
+                _child_db.end_session(_child_sid, "delegate_complete")
+        except Exception:
+            logger.debug("Failed to end child session row after delegation", exc_info=True)
+
         # Close tool resources (terminal sandboxes, browser daemons,
         # background processes, httpx clients) so subagent subprocesses
         # don't outlive the delegation.
