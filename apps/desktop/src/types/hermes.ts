@@ -340,6 +340,8 @@ export interface SessionResumeResponse {
   info?: SessionRuntimeInfo
   message_count: number
   messages: SessionMessage[]
+  /** Prompts waiting in the gateway's per-session queue (head first). */
+  queued_prompts?: { id: string; queued_at: number; text: string }[]
   resumed: string
   session_id: string
 }

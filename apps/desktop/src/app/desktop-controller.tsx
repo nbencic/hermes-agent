@@ -9,6 +9,7 @@ import { DesktopOnboardingOverlay } from '@/components/desktop-onboarding-overla
 import { GatewayConnectingOverlay } from '@/components/gateway-connecting-overlay'
 import { Pane, PaneMain } from '@/components/pane-shell'
 import { useMediaQuery } from '@/hooks/use-media-query'
+import type { ServerQueuedPrompt } from '@/lib/chat-messages'
 import { useSkinCommand } from '@/themes/use-skin-command'
 
 import { formatRefValue } from '../components/assistant-ui/directive-text'
@@ -22,7 +23,7 @@ import {
 } from '../lib/session-source'
 import { latestSessionTodos } from '../lib/todos'
 import { moveSessionDraft } from '../store/composer'
-import { migrateQueuedPrompts } from '../store/composer-queue'
+import { migrateQueuedPrompts, syncServerQueue } from '../store/composer-queue'
 import { setCronFocusJobId, setCronJobs } from '../store/cron'
 import {
   $panesFlipped,
@@ -652,9 +653,21 @@ export function DesktopController() {
     [location.pathname, navigate, selectedStoredSessionIdRef]
   )
 
+  // The composer keys its queue panel by the stored id when one is known
+  // (queueSessionKey), else by the runtime id — mirror the gateway's queue
+  // under the same key so the panel shows it.
+  const handlePromptQueueChanged = useCallback(
+    (runtimeSessionId: string, queued: ServerQueuedPrompt[]) => {
+      const storedId = sessionStateByRuntimeIdRef.current.get(runtimeSessionId)?.storedSessionId
+      syncServerQueue(storedId || runtimeSessionId, queued)
+    },
+    [sessionStateByRuntimeIdRef]
+  )
+
   const { handleGatewayEvent } = useMessageStream({
     activeSessionIdRef,
     hydrateFromStoredSession,
+    onPromptQueueChanged: handlePromptQueueChanged,
     onSessionKeyChanged: handleSessionKeyChanged,
     queryClient,
     refreshHermesConfig,

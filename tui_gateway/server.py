@@ -3867,6 +3867,79 @@ def _clear_inflight_turn(session: dict) -> None:
     session["inflight_turn"] = None
 
 
+# ── Server-side prompt queue ─────────────────────────────────────────────
+# A prompt submitted with ``queue: true`` while a turn is running waits here
+# and is chained *inside* the finishing turn's ``finally`` without ever
+# releasing ``session["running"]``. That closes the race the desktop's
+# client-side queue always lost: the notification poller (background-process
+# completions) and the /goal continuation grab the idle slot the instant a
+# turn ends, long before a ``message.complete`` round-trips to the client and
+# its ``prompt.submit`` comes back.
+_PROMPT_QUEUE_MAX = 50
+
+
+def _queue_snapshot(session: dict) -> list:
+    pending = session.get("pending_prompts") or []
+    return [
+        {
+            "id": str(e.get("id") or ""),
+            "text": str(e.get("text") or ""),
+            "queued_at": float(e.get("queued_at") or 0.0),
+        }
+        for e in pending
+        if isinstance(e, dict)
+    ]
+
+
+def _emit_prompt_queue(sid: str, session: dict) -> None:
+    _emit("prompt.queue", sid, {"queued": _queue_snapshot(session)})
+
+
+def _pop_pending_prompt_locked(session: dict) -> Optional[dict]:
+    """Under ``history_lock``: take the next queued prompt and claim the turn.
+
+    Returns None when nothing is queued (caller then releases ``running``).
+    """
+    pending = session.get("pending_prompts") or []
+    while pending:
+        entry = pending.pop(0)
+        text = str(entry.get("text") or "") if isinstance(entry, dict) else ""
+        if not text.strip():
+            continue
+        session["running"] = True
+        session["last_active"] = time.time()
+        _start_inflight_turn(session, text)
+        return entry
+    return None
+
+
+def _dispatch_pending_prompt(sid: str, session: dict, entry: dict) -> None:
+    """Run a prompt popped by :func:`_pop_pending_prompt_locked`.
+
+    The client never built an optimistic bubble for a queued prompt, so a
+    ``message.user`` event carries the text it should render before the
+    ``message.start`` that ``_run_prompt_submit`` emits.
+    """
+    text = str(entry.get("text") or "")
+    _emit_prompt_queue(sid, session)
+    _emit("message.user", sid, {"text": text, "queue_id": str(entry.get("id") or "")})
+    try:
+        _run_prompt_submit(
+            entry.get("rid") or f"__queued__{entry.get('id') or ''}", sid, session, text
+        )
+    except Exception as exc:
+        print(
+            f"[tui_gateway] queued prompt dispatch failed: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        with session["history_lock"]:
+            session["running"] = False
+            _clear_inflight_turn(session)
+        _emit("error", sid, {"message": f"queued prompt failed: {exc}"})
+        _emit("session.info", sid, _session_info(session.get("agent"), session))
+
+
 def _inflight_snapshot(session: dict) -> dict | None:
     turn = session.get("inflight_turn")
     if not isinstance(turn, dict):
@@ -4514,6 +4587,9 @@ def _live_session_payload(
     }
     if inflight:
         payload["inflight"] = inflight
+    queued = _queue_snapshot(session)
+    if queued:
+        payload["queued_prompts"] = queued
     return payload
 
 
@@ -5580,8 +5656,29 @@ def _(rid, params: dict) -> dict:
     # or fallback moved the session transport to stdio.
     if (t := current_transport()) is not None:
         session["transport"] = t
+    queued_entry = None
     with session["history_lock"]:
         if session.get("running"):
+            if not params.get("queue"):
+                return _err(rid, 4009, "session busy")
+            pending = session.setdefault("pending_prompts", [])
+            if len(pending) >= _PROMPT_QUEUE_MAX:
+                return _err(rid, 4019, "prompt queue full")
+            queued_entry = {
+                "id": f"q_{int(time.time() * 1000)}_{os.urandom(3).hex()}",
+                "text": text,
+                "queued_at": time.time(),
+                "rid": rid,
+            }
+            pending.append(queued_entry)
+            queue_position = len(pending)
+    if queued_entry is not None:
+        _emit_prompt_queue(sid, session)
+        return _ok(rid, {"status": "queued", "queue_id": queued_entry["id"], "position": queue_position})
+    with session["history_lock"]:
+        if session.get("running"):
+            # Lost a race with a turn that started between the two locks
+            # (notification poller / goal follow-up). Same answer as before.
             return _err(rid, 4009, "session busy")
         # A watch session's run lives in the PARENT turn, so its own running
         # flag is False — without this, typing mid-run builds a second agent
@@ -5614,6 +5711,10 @@ def _(rid, params: dict) -> dict:
     # Persist the DB row lazily, now that the user has actually sent a message.
     _ensure_session_db_row(session)
     _start_agent_build(sid, session)
+    if params.get("queue"):
+        # The client thought the session was busy and built no optimistic
+        # bubble; tell it which text this turn is for, like a dequeued prompt.
+        _emit("message.user", sid, {"text": text, "queue_id": ""})
 
     def run_after_agent_ready() -> None:
         err = _wait_agent(session, rid)
@@ -5635,6 +5736,48 @@ def _(rid, params: dict) -> dict:
 
     threading.Thread(target=run_after_agent_ready, daemon=True).start()
     return _ok(rid, {"status": "streaming"})
+
+
+@method("prompt.queue")
+def _(rid, params: dict) -> dict:
+    """Inspect or edit the server-side prompt queue of a running session."""
+    sid = params.get("session_id", "")
+    session, err = _sess_nowait(params, rid)
+    if err:
+        return err
+    action = str(params.get("action") or "list")
+    qid = str(params.get("queue_id") or "")
+    changed = False
+    with session["history_lock"]:
+        pending = session.setdefault("pending_prompts", [])
+        if action == "list":
+            pass
+        elif action == "remove":
+            kept = [e for e in pending if str(e.get("id") or "") != qid]
+            changed = len(kept) != len(pending)
+            pending[:] = kept
+        elif action == "promote":
+            idx = next((i for i, e in enumerate(pending) if str(e.get("id") or "") == qid), -1)
+            if idx > 0:
+                pending.insert(0, pending.pop(idx))
+                changed = True
+        elif action == "update":
+            new_text = params.get("text")
+            if not isinstance(new_text, str) or not new_text.strip():
+                return _err(rid, 4004, "text must be a non-empty string")
+            for e in pending:
+                if str(e.get("id") or "") == qid and e.get("text") != new_text:
+                    e["text"] = new_text
+                    changed = True
+        elif action == "clear":
+            changed = bool(pending)
+            pending[:] = []
+        else:
+            return _err(rid, 4004, f"unknown queue action: {action}")
+        snapshot = _queue_snapshot(session)
+    if changed:
+        _emit("prompt.queue", sid, {"queued": snapshot})
+    return _ok(rid, {"queued": snapshot})
 
 
 def _notification_event_belongs_elsewhere(session: dict, evt: dict) -> bool:
@@ -5849,6 +5992,7 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
         session_tokens = []
         home_token = None  # per-turn HERMES_HOME override for a resumed remote profile
         goal_followup = None  # set by the post-turn goal hook below
+        next_prompt = None  # queued prompt chained without releasing running
         try:
             from tools.approval import (
                 reset_current_session_key,
@@ -6193,10 +6337,21 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                 reset_hermes_home_override(home_token)
             _clear_session_context(session_tokens)
             with session["history_lock"]:
-                session["running"] = False
                 session["last_active"] = time.time()
                 _clear_inflight_turn(session)
+                # A queued user prompt takes the slot *before* running is
+                # released, so neither the notification poller nor the goal
+                # follow-up below can get in front of it.
+                next_prompt = _pop_pending_prompt_locked(session)
+                if next_prompt is None:
+                    session["running"] = False
             _emit("session.info", sid, _session_info(agent, session))
+
+        if next_prompt is not None:
+            # The user's prompt wins over goal continuation and mid-turn
+            # notifications; both re-evaluate when the chained turn ends.
+            _dispatch_pending_prompt(sid, session, next_prompt)
+            return
 
         # Chain a goal-continuation turn if the judge said so. We do
         # this AFTER the finally releases session["running"], so the

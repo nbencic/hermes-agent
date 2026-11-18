@@ -20,6 +20,12 @@ export type ChatMessage = {
   attachmentRefs?: string[]
 }
 
+export interface ServerQueuedPrompt {
+  id: string
+  text: string
+  queued_at: number
+}
+
 export type GatewayEventPayload = {
   text?: string
   rendered?: string
@@ -51,6 +57,10 @@ export type GatewayEventPayload = {
   session_key?: string
   old_key?: string
   new_key?: string
+  /** prompt.queue: the session's server-side prompt queue, head first. */
+  queued?: ServerQueuedPrompt[]
+  /** message.user: id of the dequeued prompt ('' when it ran immediately). */
+  queue_id?: string
   cwd?: string
   branch?: string
   credential_warning?: string

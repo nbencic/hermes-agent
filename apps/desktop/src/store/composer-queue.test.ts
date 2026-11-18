@@ -7,12 +7,15 @@ import {
   dequeueQueuedPrompt,
   enqueueQueuedPrompt,
   getQueuedPrompts,
+  isServerQueuedId,
   migrateQueuedPrompts,
   promoteQueuedPrompt,
   removeQueuedPrompt,
   shouldAutoDrain,
+  syncServerQueue,
   updateQueuedPrompt,
-  updateQueuedPromptText
+  updateQueuedPromptText,
+  upsertServerQueuedPrompt
 } from './composer-queue'
 
 const SESSION_KEY = 'session-abc'
@@ -166,5 +169,63 @@ describe('shouldAutoDrain', () => {
 
   it('does not drain an empty queue', () => {
     expect(shouldAutoDrain({ isBusy: false, queueLength: 0 })).toBe(false)
+  })
+})
+
+
+describe('server-mirrored queue entries', () => {
+  beforeEach(() => {
+    window.localStorage.removeItem(QUEUE_STORAGE_KEY)
+    $queuedPromptsBySession.set({})
+  })
+
+  it('tells gateway-minted ids apart from local ones', () => {
+    expect(isServerQueuedId('q_1795015979960_ab12cd')).toBe(true)
+    expect(isServerQueuedId('queued-1795015979960-jlwl1d')).toBe(false)
+  })
+
+  it('upserts a server entry after existing server entries, before local ones', () => {
+    const local = enqueueQueuedPrompt(SESSION_KEY, { text: 'local', attachments: [] })!
+    expect(upsertServerQueuedPrompt(SESSION_KEY, { id: 'q_1', text: 'one', queued_at: 1 })).toBe(true)
+    expect(upsertServerQueuedPrompt(SESSION_KEY, { id: 'q_2', text: 'two', queued_at: 2 })).toBe(true)
+    expect(upsertServerQueuedPrompt(SESSION_KEY, { id: 'q_2', text: 'two', queued_at: 2 })).toBe(false)
+    expect(upsertServerQueuedPrompt(SESSION_KEY, { id: 'queued-x', text: 'nope', queued_at: 2 })).toBe(false)
+
+    expect(getQueuedPrompts(SESSION_KEY).map(e => e.id)).toEqual(['q_1', 'q_2', local.id])
+    expect(getQueuedPrompts(SESSION_KEY)[0]!.queuedAt).toBe(1000)
+  })
+
+  it('syncs the server part of the queue from a snapshot and keeps local entries', () => {
+    const local = enqueueQueuedPrompt(SESSION_KEY, { text: 'local', attachments: [] })!
+    upsertServerQueuedPrompt(SESSION_KEY, { id: 'q_1', text: 'one', queued_at: 1 })
+    upsertServerQueuedPrompt(SESSION_KEY, { id: 'q_2', text: 'two', queued_at: 2 })
+
+    // gateway promoted q_2 and edited q_1
+    expect(
+      syncServerQueue(SESSION_KEY, [
+        { id: 'q_2', text: 'two', queued_at: 2 },
+        { id: 'q_1', text: 'one!', queued_at: 1 }
+      ])
+    ).toBe(true)
+    expect(getQueuedPrompts(SESSION_KEY).map(e => [e.id, e.text])).toEqual([
+      ['q_2', 'two'],
+      ['q_1', 'one!'],
+      [local.id, 'local']
+    ])
+
+    // identical snapshot → no write
+    expect(
+      syncServerQueue(SESSION_KEY, [
+        { id: 'q_2', text: 'two', queued_at: 2 },
+        { id: 'q_1', text: 'one!', queued_at: 1 }
+      ])
+    ).toBe(false)
+
+    // gateway drained everything → only the local entry remains
+    expect(syncServerQueue(SESSION_KEY, [])).toBe(true)
+    expect(getQueuedPrompts(SESSION_KEY).map(e => e.id)).toEqual([local.id])
+
+    // and the key disappears entirely once nothing is left
+    expect(syncServerQueue('other-session', [])).toBe(false)
   })
 })

@@ -70,6 +70,76 @@ const queueFor = (sid: string) => $queuedPromptsBySession.get()[sid] ?? []
 
 const nextId = () => `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
+/**
+ * Server-side queue ids are minted by the gateway (`q_<ms>_<hex>`). Entries
+ * carrying one are mirrored from `prompt.queue` events and drained by the
+ * gateway itself; the composer must never auto-submit them.
+ */
+export const isServerQueuedId = (id: string): boolean => id.startsWith('q_')
+
+export interface ServerQueueEntry {
+  id: string
+  text: string
+  queued_at: number
+}
+
+const fromServerEntry = (entry: ServerQueueEntry): QueuedPromptEntry => ({
+  id: entry.id,
+  text: entry.text,
+  attachments: [],
+  queuedAt: Math.round((entry.queued_at || 0) * 1000) || Date.now()
+})
+
+/** Add one server-queued prompt (the gateway's `prompt.submit` ack) if not mirrored yet. */
+export const upsertServerQueuedPrompt = (key: string | null | undefined, entry: ServerQueueEntry): boolean => {
+  const sid = sidOf(key)
+
+  if (!sid || !entry.id || !isServerQueuedId(entry.id)) {
+    return false
+  }
+
+  const current = queueFor(sid)
+
+  if (current.some(e => e.id === entry.id)) {
+    return false
+  }
+
+  const lastServer = current.map(e => isServerQueuedId(e.id)).lastIndexOf(true)
+  const next = [...current.slice(0, lastServer + 1), fromServerEntry(entry), ...current.slice(lastServer + 1)]
+
+  writeSession(sid, next)
+
+  return true
+}
+
+/**
+ * Replace the server-mirrored part of a session's queue with the gateway's
+ * current snapshot. Local (not-yet-sendable) entries keep their place after
+ * the server ones. Returns true when the visible queue changed.
+ */
+export const syncServerQueue = (key: string | null | undefined, entries: ServerQueueEntry[]): boolean => {
+  const sid = sidOf(key)
+
+  if (!sid) {
+    return false
+  }
+
+  const current = queueFor(sid)
+  const local = current.filter(e => !isServerQueuedId(e.id))
+  const next = [...entries.filter(e => e.id && isServerQueuedId(e.id)).map(fromServerEntry), ...local]
+
+  const same =
+    next.length === current.length && next.every((e, i) => e.id === current[i]!.id && e.text === current[i]!.text)
+
+  if (same) {
+    return false
+  }
+
+  writeSession(sid, next)
+
+  return true
+}
+
 const cloneAttachments = (attachments: ComposerAttachment[]) => attachments.map(a => ({ ...a }))
 
 export const getQueuedPrompts = (key: string | null | undefined): QueuedPromptEntry[] => {

@@ -13,6 +13,8 @@ import {
   type GatewayEventPayload,
   reasoningPart,
   renderMediaTags,
+  type ServerQueuedPrompt,
+  textPart,
   upsertToolPart
 } from '@/lib/chat-messages'
 import { coerceGatewayText, coerceThinkingText, normalizePersonalityValue } from '@/lib/chat-runtime'
@@ -67,6 +69,8 @@ interface MessageStreamOptions {
    * the parent row and continues in a child). The runtime id is unchanged.
    */
   onSessionKeyChanged?: (runtimeSessionId: string, oldKey: string, newKey: string) => void
+  /** The gateway's per-session prompt queue changed (head first). */
+  onPromptQueueChanged?: (runtimeSessionId: string, queued: ServerQueuedPrompt[]) => void
   queryClient: QueryClient
   refreshHermesConfig: () => Promise<void>
   refreshSessions: () => Promise<void>
@@ -261,6 +265,7 @@ function delegateTaskPayloads(
 export function useMessageStream({
   activeSessionIdRef,
   hydrateFromStoredSession,
+  onPromptQueueChanged,
   onSessionKeyChanged,
   queryClient,
   refreshHermesConfig,
@@ -746,6 +751,31 @@ export function useMessageStream({
         void refreshSessions()
 
         return
+      } else if (event.type === 'prompt.queue') {
+        if (sessionId) {
+          onPromptQueueChanged?.(sessionId, Array.isArray(payload?.queued) ? payload.queued : [])
+        }
+
+        return
+      } else if (event.type === 'message.user') {
+        // A prompt the gateway dequeued (or ran straight away from a
+        // queue-flagged submit): the client built no optimistic bubble for
+        // it, so render the user turn now, ahead of its message.start.
+        const text = coerceGatewayText(payload?.text)
+
+        if (!sessionId || !text.trim()) {
+          return
+        }
+
+        const id = `user-queued-${payload?.queue_id || Date.now()}`
+
+        updateSessionState(sessionId, state =>
+          state.messages.some(m => m.id === id)
+            ? state
+            : { ...state, messages: [...state.messages, { id, role: 'user', parts: [textPart(text)] }] }
+        )
+
+        return
       } else if (event.type === 'session.info') {
         // Apply session-scoped fields when the event targets the active
         // session, OR when it's a global broadcast and we have no session.
@@ -1149,6 +1179,7 @@ export function useMessageStream({
       completeAssistantMessage,
       failAssistantMessage,
       flushQueuedDeltas,
+      onPromptQueueChanged,
       onSessionKeyChanged,
       queryClient,
       refreshHermesConfig,

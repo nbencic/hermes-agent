@@ -7515,3 +7515,136 @@ def test_reap_idle_sessions_closes_only_evictable(monkeypatch):
         assert closed == [("stale", "idle_timeout")]
     finally:
         server._sessions.clear()
+
+
+# ── Server-side prompt queue ─────────────────────────────────────────────
+
+
+def _queue_emits(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        server, "_emit", lambda event, sid=None, payload=None, **kw: emitted.append((event, sid, payload))
+    )
+    return emitted
+
+
+def test_prompt_submit_without_queue_flag_is_still_busy(monkeypatch):
+    server._sessions["sid"] = _session(running=True)
+    _queue_emits(monkeypatch)
+    resp = server.handle_request(
+        {"id": "1", "method": "prompt.submit", "params": {"session_id": "sid", "text": "later"}}
+    )
+    assert resp["error"]["code"] == 4009
+    assert not server._sessions["sid"].get("pending_prompts")
+
+
+def test_prompt_submit_queue_flag_queues_while_running(monkeypatch):
+    server._sessions["sid"] = _session(running=True)
+    emitted = _queue_emits(monkeypatch)
+    resp = server.handle_request(
+        {
+            "id": "1",
+            "method": "prompt.submit",
+            "params": {"session_id": "sid", "text": "later", "queue": True},
+        }
+    )
+    assert resp["result"]["status"] == "queued"
+    assert resp["result"]["position"] == 1
+    qid = resp["result"]["queue_id"]
+    pending = server._sessions["sid"]["pending_prompts"]
+    assert [e["text"] for e in pending] == ["later"]
+    assert pending[0]["id"] == qid
+    assert emitted[-1][0] == "prompt.queue"
+    assert [e["id"] for e in emitted[-1][2]["queued"]] == [qid]
+
+
+def test_turn_end_chains_queued_prompt_without_releasing_running(monkeypatch):
+    """A queued prompt starts inside the finishing turn — the slot is never free."""
+    prompts = []
+    running_seen = []
+
+    class _Agent:
+        def run_conversation(self, prompt, conversation_history=None, stream_callback=None):
+            prompts.append(prompt)
+            return {
+                "final_response": f"done {prompt}",
+                "messages": [{"role": "assistant", "content": f"done {prompt}"}],
+            }
+
+    session = _session(agent=_Agent())
+    server._sessions["sid"] = session
+    emitted = []
+
+    def _emit(event, sid=None, payload=None, **kw):
+        emitted.append((event, payload))
+        if event == "session.info":
+            running_seen.append(bool(session.get("running")))
+
+    monkeypatch.setattr(server, "_emit", _emit)
+    monkeypatch.setattr(server.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(server, "make_stream_renderer", lambda cols: None)
+    monkeypatch.setattr(server, "render_message", lambda raw, cols: None)
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+
+    # The poller / goal hook must never see the session idle between turns.
+    orig_pop = server._pop_pending_prompt_locked
+
+    def _pop(sess):
+        assert sess.get("running") is True
+        return orig_pop(sess)
+
+    monkeypatch.setattr(server, "_pop_pending_prompt_locked", _pop)
+
+    session["pending_prompts"] = [
+        {"id": "q_1", "text": "second", "queued_at": 1.0, "rid": "r2"},
+        {"id": "q_2", "text": "third", "queued_at": 2.0, "rid": "r3"},
+    ]
+    resp = server.handle_request(
+        {"id": "1", "method": "prompt.submit", "params": {"session_id": "sid", "text": "first"}}
+    )
+    assert resp["result"]["status"] == "streaming"
+
+    assert prompts == ["first", "second", "third"]
+    assert session["pending_prompts"] == []
+    assert session["running"] is False
+    # session.info after the 1st and 2nd turn still reports running (chained);
+    # only the last one releases the slot.
+    assert running_seen == [True, True, False]
+    users = [p for e, p in emitted if e == "message.user"]
+    assert [u["text"] for u in users] == ["second", "third"]
+    assert [u["queue_id"] for u in users] == ["q_1", "q_2"]
+    queues = [p["queued"] for e, p in emitted if e == "prompt.queue"]
+    assert [[q["id"] for q in snap] for snap in queues] == [["q_2"], []]
+
+
+def test_prompt_queue_rpc_edits_pending(monkeypatch):
+    session = _session(running=True)
+    session["pending_prompts"] = [
+        {"id": "a", "text": "A", "queued_at": 1.0},
+        {"id": "b", "text": "B", "queued_at": 2.0},
+        {"id": "c", "text": "C", "queued_at": 3.0},
+    ]
+    server._sessions["sid"] = session
+    emitted = _queue_emits(monkeypatch)
+
+    def call(action, **extra):
+        return server.handle_request(
+            {"id": "1", "method": "prompt.queue", "params": {"session_id": "sid", "action": action, **extra}}
+        )
+
+    assert [e["id"] for e in call("list")["result"]["queued"]] == ["a", "b", "c"]
+    assert not emitted  # list is read-only, no event
+
+    assert [e["id"] for e in call("promote", queue_id="c")["result"]["queued"]] == ["c", "a", "b"]
+    assert emitted[-1][0] == "prompt.queue"
+
+    assert [e["text"] for e in call("update", queue_id="a", text="A2")["result"]["queued"]] == ["C", "A2", "B"]
+    assert call("update", queue_id="a", text="   ")["error"]["code"] == 4004
+
+    assert [e["id"] for e in call("remove", queue_id="a")["result"]["queued"]] == ["c", "b"]
+    n = len(emitted)
+    assert [e["id"] for e in call("remove", queue_id="zzz")["result"]["queued"]] == ["c", "b"]
+    assert len(emitted) == n  # nothing changed → no event
+
+    assert call("clear")["result"]["queued"] == []
+    assert call("bogus")["error"]["code"] == 4004

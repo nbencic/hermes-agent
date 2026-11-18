@@ -8,7 +8,7 @@ import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChat
 import { normalizePersonalityValue } from '@/lib/chat-runtime'
 import { embeddedImageUrls, textWithoutEmbeddedImages } from '@/lib/embedded-images'
 import { setSessionYolo } from '@/lib/yolo-session'
-import { clearQueuedPrompts } from '@/store/composer-queue'
+import { clearQueuedPrompts, syncServerQueue } from '@/store/composer-queue'
 import { $pinnedSessionIds } from '@/store/layout'
 import { clearNotifications, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding } from '@/store/onboarding'
@@ -682,6 +682,7 @@ export function useSessionActions({
           ...(watchWindow ? { lazy: true } : {}),
           ...(sessionProfile ? { profile: sessionProfile } : {})
         })
+
         // The rejection is consumed by the `await` below; this guard only
         // keeps it from surfacing as unhandled while the prefetch settles.
         resumePromise.catch(() => undefined)
@@ -703,6 +704,10 @@ export function useSessionActions({
         }
 
         const resumed = await resumePromise
+
+        // Prompts the gateway still holds for this session survive a reconnect;
+        // an empty list clears stale mirrored entries.
+        syncServerQueue(storedSessionId, resumed?.queued_prompts ?? [])
 
         if (!isCurrentResume()) {
           return

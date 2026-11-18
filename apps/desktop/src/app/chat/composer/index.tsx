@@ -43,13 +43,15 @@ import {
 import {
   $queuedPromptsBySession,
   enqueueQueuedPrompt,
+  isServerQueuedId,
   MAX_AUTO_DRAIN_ATTEMPTS,
   migrateQueuedPrompts,
   promoteQueuedPrompt,
   type QueuedPromptEntry,
   removeQueuedPrompt,
   shouldAutoDrain,
-  updateQueuedPrompt
+  updateQueuedPrompt,
+  upsertServerQueuedPrompt
 } from '@/store/composer-queue'
 import { $statusItemsBySession } from '@/store/composer-status'
 import { notify } from '@/store/notifications'
@@ -1297,6 +1299,37 @@ export function ChatBar({
   // Walk queued entries while editing (ArrowUp = older, ArrowDown = newer),
   // saving the in-progress edit on each step. Stepping newer past the last
   // entry exits edit mode and restores the pre-edit draft.
+  // Server-mirrored entries (gateway queue) must be edited on the gateway too,
+  // otherwise the turn runs with the old text. The local mirror updates first
+  // so the panel reflects the edit immediately; the prompt.queue event that
+  // follows the RPC re-syncs it.
+  const queueRpc = useCallback(
+    (params: Record<string, unknown>) => {
+      if (!gateway || !sessionId) {
+        return Promise.resolve(null)
+      }
+
+      return gateway
+        .request<{ queued?: unknown }>('prompt.queue', { session_id: sessionId, ...params })
+        .catch(() => null)
+    },
+    [gateway, sessionId]
+  )
+
+  const persistQueuedEdit = (
+    key: string,
+    id: string,
+    update: { text: string; attachments?: ComposerAttachment[] }
+  ): boolean => {
+    const saved = updateQueuedPrompt(key, id, update)
+
+    if (saved && isServerQueuedId(id) && update.text.trim()) {
+      void queueRpc({ action: 'update', queue_id: id, text: update.text })
+    }
+
+    return saved
+  }
+
   const stepQueuedEdit = (direction: -1 | 1) => {
     if (!queueEdit) {
       return false
@@ -1309,7 +1342,7 @@ export function ChatBar({
       return index >= 0 // at the oldest: swallow; missing entry: let it fall through
     }
 
-    const saved = updateQueuedPrompt(queueEdit.sessionKey, queueEdit.entryId, {
+    const saved = persistQueuedEdit(queueEdit.sessionKey, queueEdit.entryId, {
       attachments: cloneAttachments($composerAttachments.get()),
       text: draftRef.current
     })
@@ -1343,7 +1376,7 @@ export function ChatBar({
         return false
       }
 
-      const saved = updateQueuedPrompt(queueEdit.sessionKey, queueEdit.entryId, { attachments: next, text })
+      const saved = persistQueuedEdit(queueEdit.sessionKey, queueEdit.entryId, { attachments: next, text })
       triggerHaptic(saved ? 'success' : 'selection')
     } else {
       triggerHaptic('cancel')
@@ -1361,6 +1394,40 @@ export function ChatBar({
       return false
     }
 
+    // Text-only prompts queue on the gateway: it chains them into the
+    // finishing turn before anything else (background-process notices, /goal
+    // follow-ups) can take the idle slot, which the client-side drain always
+    // lost. Attachments still go through the local queue (they are synced at
+    // send time), as does anything queued before a runtime session exists.
+    if (gateway && sessionId && attachments.length === 0 && draft.trim()) {
+      const text = draft
+      const key = activeQueueSessionKey
+
+      clearDraft()
+      triggerHaptic('selection')
+
+      void gateway
+        .request<{ position?: number; queue_id?: string; status?: string }>('prompt.submit', {
+          session_id: sessionId,
+          text,
+          queue: true
+        })
+        .then(res => {
+          if (res?.status === 'queued' && res.queue_id) {
+            upsertServerQueuedPrompt(key, { id: res.queue_id, text, queued_at: Date.now() / 1000 })
+          }
+          // 'streaming' → the session was idle after all and the turn already
+          // started; the gateway's message.user event paints the bubble.
+        })
+        .catch(() => {
+          // Gateway unreachable / stale session: fall back to the local queue
+          // so nothing is lost; the auto-drain sends it when the session idles.
+          enqueueQueuedPrompt(key, { text, attachments: [] })
+        })
+
+      return true
+    }
+
     if (!enqueueQueuedPrompt(activeQueueSessionKey, { text: draft, attachments })) {
       return false
     }
@@ -1370,7 +1437,7 @@ export function ChatBar({
     triggerHaptic('selection')
 
     return true
-  }, [activeQueueSessionKey, attachments, clearDraft, draft])
+  }, [activeQueueSessionKey, attachments, clearDraft, draft, gateway, sessionId])
 
   // Steer the live turn (nudge without interrupting). Clears the draft up front
   // for snappy feedback; if the gateway rejects (no live tool window) the words
@@ -1433,7 +1500,8 @@ export function ChatBar({
     (entries: QueuedPromptEntry[]) => {
       const skip = queueEditRef.current?.entryId
 
-      return skip ? entries.find(e => e.id !== skip) : entries[0]
+      // Server-mirrored entries are drained by the gateway itself.
+      return entries.find(e => e.id !== skip && !isServerQueuedId(e.id))
     },
     [] // reads the edit id off a ref so the lock-holder always sees the latest
   )
@@ -1449,12 +1517,25 @@ export function ChatBar({
       if (busy) {
         // Promote to the head, then interrupt. The gateway always emits a
         // settle (message.complete + session.info running:false) when the
-        // turn unwinds, and the busy→false auto-drain below sends this entry.
+        // turn unwinds; a server-queued entry is then chained by the gateway
+        // itself, a local one by the busy→false auto-drain below.
         promoteQueuedPrompt(activeQueueSessionKey, id)
+
+        if (isServerQueuedId(id)) {
+          void queueRpc({ action: 'promote', queue_id: id })
+        }
+
         triggerHaptic('selection')
         void Promise.resolve(onCancel())
 
         return true
+      }
+
+      // A server-mirrored entry still here while idle is stale (the gateway
+      // drains its queue inside the finishing turn): drop it there and send
+      // the text as a normal prompt.
+      if (isServerQueuedId(id)) {
+        void queueRpc({ action: 'remove', queue_id: id })
       }
 
       // A manual send clears the auto-drain backoff so a stuck entry the user
@@ -1463,7 +1544,7 @@ export function ChatBar({
 
       return runDrain(entries => entries.find(e => e.id === id))
     },
-    [activeQueueSessionKey, busy, onCancel, queueEdit, runDrain]
+    [activeQueueSessionKey, busy, onCancel, queueEdit, queueRpc, runDrain]
   )
 
   // Edge-independent auto-drain: send the head whenever the session is idle and
@@ -1865,6 +1946,10 @@ export function ChatBar({
                   editingId={queueEdit?.entryId ?? null}
                   entries={queuedPrompts}
                   onDelete={id => {
+                    if (isServerQueuedId(id)) {
+                      void queueRpc({ action: 'remove', queue_id: id })
+                    }
+
                     if (removeQueuedPrompt(activeQueueSessionKey, id) && queueEdit?.entryId === id) {
                       exitQueuedEdit('cancel')
                     }
