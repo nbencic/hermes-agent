@@ -12,6 +12,7 @@ import { $selectedStoredSessionId } from '@/store/session'
 import type { CronJob } from '@/types/hermes'
 
 import { jobState, jobTitle, STATE_DOT } from '../../cron/job-state'
+import { isScriptRun, openCronRunOutput } from '../../cron/run-output'
 import { SidebarPanelLabel } from '../../shell/sidebar-label'
 
 import { SidebarLoadMoreRow } from './load-more-row'
@@ -335,19 +336,24 @@ function CronJobSidebarRuns({ jobId, onOpenRun }: { jobId: string; onOpenRun: (s
       ) : (
         <>
           {runs.map(run => (
-            <button
-              className={cn(
-                'truncate rounded-md px-1.5 py-0.5 text-left text-[0.6875rem] tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-                run.id === selectedSessionId
-                  ? 'bg-(--ui-row-active-background) text-foreground'
-                  : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
-              )}
-              key={run.id}
-              onClick={() => onOpenRun(run.id)}
-              type="button"
-            >
-              {formatRunTime(run.last_active || run.started_at)}
-            </button>
+            <Tip key={run.id} label={isScriptRun(run) ? run.preview : undefined}>
+              <button
+                className={cn(
+                  'truncate rounded-md px-1.5 py-0.5 text-left text-[0.6875rem] tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+                  run.id === selectedSessionId
+                    ? 'bg-(--ui-row-active-background) text-foreground'
+                    : 'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground'
+                )}
+                onClick={() =>
+                  isScriptRun(run)
+                    ? run.output_path && void openCronRunOutput(run.output_path, t.rightSidebar.previewUnavailable)
+                    : onOpenRun(run.id)
+                }
+                type="button"
+              >
+                {formatRunTime(run.last_active || run.started_at)}
+              </button>
+            </Tip>
           ))}
         </>
       )}

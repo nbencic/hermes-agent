@@ -1187,6 +1187,105 @@ def save_job_output(job_id: str, output: str):
     return output_file
 
 
+_OUTPUT_FILE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.md$")
+_OUTPUT_HEADER_BYTES = 4096
+
+
+def _output_file_epoch(dt: datetime) -> float:
+    # Filenames are wall-clock in the configured tz (see save_job_output);
+    # with no tz configured a naive timestamp() is server-local and DST-aware,
+    # unlike borrowing _hermes_now()'s fixed offset.
+    from hermes_time import get_timezone
+
+    tz = get_timezone()
+    return (dt.replace(tzinfo=tz) if tz is not None else dt).timestamp()
+
+
+def list_job_output_runs(job_id: str, limit: int = 20) -> Dict[str, Any]:
+    """Synthesize run-history rows from a no_agent job's saved output reports.
+
+    Script-only runs never open a SessionDB session, so the per-run markdown
+    report under ``OUTPUT_DIR/<job_id>/`` is their only trace. Rows mirror the
+    session shape the desktop renders (SessionInfo). Agent-run reports are
+    skipped: those runs already have a session row. Returned wrapped in a dict
+    so the web server's per-job annotation does not touch each row.
+    """
+    try:
+        out_dir = _job_output_dir(job_id)
+        names = sorted(
+            (n for n in os.listdir(out_dir) if _OUTPUT_FILE_RE.match(n)), reverse=True
+        )
+    except (OSError, ValueError):
+        return {"runs": []}
+
+    runs: List[Dict[str, Any]] = []
+    for name in names:
+        if len(runs) >= limit:
+            break
+        path = out_dir / name
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                head = f.read(_OUTPUT_HEADER_BYTES)
+            dt = datetime(*(int(g) for g in _OUTPUT_FILE_RE.match(name).groups()))
+            epoch = _output_file_epoch(dt)
+        except (OSError, ValueError, OverflowError):
+            continue
+
+        fields: Dict[str, str] = {}
+        job_name = ""
+        body_lines: List[str] = []
+        in_body = False
+        for line in head.splitlines():
+            if in_body:
+                if line.strip():
+                    body_lines.append(line.strip())
+                    break
+                continue
+            if line.startswith("# Cron Job:") and not job_name:
+                job_name = line[len("# Cron Job:"):].strip()
+            elif line.startswith("**") and ":**" in line:
+                # First wins: a failed run's script output follows the header
+                # without a separator and may itself contain "**Key:**" lines.
+                key, _, value = line[2:].partition(":**")
+                fields.setdefault(key.strip().lower(), value.strip())
+            elif line.strip() == "---":
+                in_body = True
+        if not fields.get("mode", "").startswith("no_agent"):
+            continue
+
+        status = fields.get("status", "")
+        if status.startswith("silent"):
+            script_status = "silent"
+        elif status:
+            script_status = "failed" if "fail" in status.lower() else status.lower()
+        else:
+            script_status = "ok"
+        preview = status or (body_lines[0][:120] if body_lines else "ok")
+        title_base = " ".join(job_name.split())[:60].strip() or f"cron {job_id}"
+
+        runs.append({
+            "id": f"cron_{job_id}_{dt.strftime('%Y%m%d_%H%M%S')}",
+            "title": f"{title_base} · {dt.strftime('%b %d %H:%M')}",
+            "source": "cron",
+            "started_at": epoch,
+            "ended_at": epoch,
+            "last_active": epoch,
+            "end_reason": "cron_complete",
+            "message_count": 0,
+            "tool_call_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": None,
+            "preview": preview,
+            "is_active": False,
+            "archived": False,
+            "run_kind": "script",
+            "script_status": script_status,
+            "output_path": str(path),
+        })
+    return {"runs": runs}
+
+
 # =============================================================================
 # Skill reference rewriting (curator integration)
 # =============================================================================

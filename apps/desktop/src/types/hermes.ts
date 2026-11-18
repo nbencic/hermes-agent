@@ -299,6 +299,11 @@ export interface SessionInfo {
   started_at: number
   title: null | string
   tool_call_count: number
+  /** Cron run rows only: 'script' marks a no_agent run synthesized from its
+   *  saved output report — there is no session behind it, so open
+   *  {@link output_path} instead. */
+  run_kind?: 'agent' | 'script'
+  output_path?: string
   /** Origin platform when this session was handed off from a messaging
    *  platform (e.g. a Telegram thread continued in the desktop app). The live
    *  {@link source} becomes local (tui/desktop) after a handoff, so the origin

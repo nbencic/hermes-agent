@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { SearchField } from '@/components/ui/search-field'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Tip } from '@/components/ui/tooltip'
 import {
   createCronJob,
   type CronJob,
@@ -41,6 +42,7 @@ import { OverlayView } from '../overlays/overlay-view'
 import type { SetStatusbarItemGroup } from '../shell/statusbar-controls'
 
 import { jobState, jobTitle, STATE_DOT } from './job-state'
+import { isScriptRun, openCronRunOutput } from './run-output'
 
 const DEFAULT_DELIVER = 'local'
 
@@ -252,6 +254,13 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
   // immediately. `loading` only gates the first paint before the atom is filled.
   const jobs = useStore($cronJobs)
   const [loading, setLoading] = useState(jobs.length === 0)
+
+  // The file preview lives in the chat right rail, which this overlay covers.
+  const openRunOutput = (path: string) => {
+    onClose()
+    void openCronRunOutput(path, t.rightSidebar.previewUnavailable)
+  }
+
   const [query, setQuery] = useState('')
   const [busyJobId, setBusyJobId] = useState<null | string>(null)
   // Master/detail: the job whose schedule + run history fill the right pane.
@@ -442,6 +451,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
                 job={selectedJob}
                 onDelete={() => setPendingDelete(selectedJob)}
                 onEdit={() => setEditor({ mode: 'edit', job: selectedJob })}
+                onOpenOutput={openRunOutput}
                 onOpenSession={onOpenSession}
                 onPauseResume={() => void handlePauseResume(selectedJob)}
                 onTrigger={() => void handleTrigger(selectedJob)}
@@ -529,6 +539,7 @@ function CronJobDetail({
   job,
   onDelete,
   onEdit,
+  onOpenOutput,
   onOpenSession,
   onPauseResume,
   onTrigger
@@ -538,6 +549,7 @@ function CronJobDetail({
   job: CronJob
   onDelete: () => void
   onEdit: () => void
+  onOpenOutput?: (path: string) => void
   onOpenSession?: (sessionId: string) => void
   onPauseResume: () => void
   onTrigger: () => void
@@ -607,7 +619,7 @@ function CronJobDetail({
             )}
           </header>
 
-          <CronJobRuns c={c} jobId={job.id} onOpenSession={onOpenSession} />
+          <CronJobRuns c={c} jobId={job.id} onOpenOutput={onOpenOutput} onOpenSession={onOpenSession} />
         </div>
       </div>
     </div>
@@ -632,10 +644,12 @@ const RUNS_POLL_INTERVAL_MS = 8000
 function CronJobRuns({
   c,
   jobId,
+  onOpenOutput,
   onOpenSession
 }: {
   c: Translations['cron']
   jobId: string
+  onOpenOutput?: (path: string) => void
   onOpenSession?: (sessionId: string) => void
 }) {
   const [runs, setRuns] = useState<null | SessionInfo[]>(null)
@@ -686,17 +700,20 @@ function CronJobRuns({
       ) : (
         <div className="flex flex-col gap-px">
           {runs.map(run => (
-            <button
-              className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs hover:bg-(--chrome-action-hover) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              key={run.id}
-              onClick={() => onOpenSession?.(run.id)}
-              type="button"
-            >
-              <span className="truncate text-foreground">{run.title?.trim() || run.preview?.trim() || run.id}</span>
-              <span className="shrink-0 text-[0.62rem] text-muted-foreground tabular-nums">
-                {formatRunTime(run.last_active || run.started_at)}
-              </span>
-            </button>
+            <Tip key={run.id} label={isScriptRun(run) ? run.preview : undefined}>
+              <button
+                className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs hover:bg-(--chrome-action-hover) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                onClick={() =>
+                  isScriptRun(run) ? run.output_path && onOpenOutput?.(run.output_path) : onOpenSession?.(run.id)
+                }
+                type="button"
+              >
+                <span className="truncate text-foreground">{run.title?.trim() || run.preview?.trim() || run.id}</span>
+                <span className="shrink-0 text-[0.62rem] text-muted-foreground tabular-nums">
+                  {formatRunTime(run.last_active || run.started_at)}
+                </span>
+              </button>
+            </Tip>
           ))}
         </div>
       )}

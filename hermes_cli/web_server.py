@@ -6999,6 +6999,7 @@ async def list_cron_job_runs(job_id: str, profile: Optional[str] = None, limit: 
     selected = profile or _find_cron_job_profile(job_id)
     # job_id may be a human name; resolve to the canonical id used in run-session ids.
     canonical = job_id
+    job = None
     if selected:
         job = _call_cron_for_profile(selected, "get_job", job_id)
         if job and job.get("id"):
@@ -7021,9 +7022,23 @@ async def list_cron_job_runs(job_id: str, profile: Optional[str] = None, limit: 
             s["archived"] = bool(s.get("archived"))
             if selected:
                 s["profile"] = selected
-        return {"runs": runs, "limit": limit_n}
     finally:
         db.close()
+
+    # no_agent script runs never open a session, so their only trace is the
+    # per-run output report; merge those in so the history isn't empty.
+    if job and job.get("no_agent"):
+        script_runs = _call_cron_for_profile(
+            selected, "list_job_output_runs", canonical, limit_n
+        ).get("runs", [])
+        seen = {s.get("id") for s in runs}
+        for r in script_runs:
+            if r["id"] not in seen:
+                r["profile"] = selected
+                runs.append(r)
+        runs.sort(key=lambda s: s.get("started_at") or 0, reverse=True)
+        runs = runs[:limit_n]
+    return {"runs": runs, "limit": limit_n}
 
 
 @app.post("/api/cron/jobs")

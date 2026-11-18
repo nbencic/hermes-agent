@@ -2625,6 +2625,86 @@ class TestNewEndpoints:
         resp = self.client.get("/api/cron/jobs/nonexistent-id")
         assert resp.status_code == 404
 
+    @staticmethod
+    def _script_report(name, job_id, run_time, status=None, body=None):
+        doc = (
+            f"# Cron Job: {name}\n\n"
+            f"**Job ID:** {job_id}\n"
+            f"**Run Time:** {run_time}\n"
+            f"**Mode:** no_agent (script)\n"
+        )
+        if status:
+            doc += f"**Status:** {status}\n"
+        if body is not None:
+            doc += f"\n---\n\n{body}\n"
+        return doc
+
+    def test_cron_runs_include_script_job_output_reports(self):
+        from datetime import datetime
+        from cron.jobs import _output_file_epoch
+        from hermes_cli.web_server import _call_cron_for_profile, _cron_profile_home
+
+        job = _call_cron_for_profile(
+            "default", "create_job", prompt=None, schedule="every 5m",
+            name="Disk watch", script="watch.sh", no_agent=True,
+        )
+        agent_job = _call_cron_for_profile(
+            "default", "create_job", prompt="hi", schedule="every 5m", name="Agent job",
+        )
+        out_root = _cron_profile_home("default")[1] / "cron" / "output"
+        out_dir = out_root / job["id"]
+        out_dir.mkdir(parents=True)
+        (out_dir / "2026-11-18_17-48-56.md").write_text(
+            self._script_report("Disk watch", job["id"], "2026-11-18 17:48:56",
+                                status="silent (empty output)"))
+        (out_dir / "2026-11-18_18-00-01.md").write_text(
+            self._script_report("Disk watch", job["id"], "2026-11-18 18:00:01",
+                                body="disk at 91%\nmore"))
+        # Script output after the header must not override header fields.
+        (out_dir / "2026-11-18_10-00-00.md").write_text(
+            self._script_report("Disk watch", job["id"], "2026-11-18 10:00:00",
+                                status="script failed") + "\n**Status:** ok\n**Mode:** agent\n")
+        # Garbage, a stray temp file and an off-pattern name must be ignored.
+        (out_dir / "2026-11-18_12-00-00.md").write_bytes(b"\xff\xfe not a report")
+        (out_dir / ".output_abc.tmp").write_text("partial")
+        (out_dir / "notes.md").write_text(self._script_report("x", "y", "z"))
+        agent_dir = out_root / agent_job["id"]
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "2026-11-18_18-00-01.md").write_text(
+            "# Cron Job: Agent job\n\n**Job ID:** x\n\n## Prompt\n\nhi\n")
+
+        resp = self.client.get(f"/api/cron/jobs/{job['id']}/runs?profile=default")
+        assert resp.status_code == 200
+        runs = resp.json()["runs"]
+        assert [r["id"] for r in runs] == [
+            f"cron_{job['id']}_20261118_180001",
+            f"cron_{job['id']}_20261118_174856",
+            f"cron_{job['id']}_20261118_100000",
+        ]
+        newest, older, failed = runs
+        assert failed["preview"] == "script failed"
+        assert failed["script_status"] == "failed"
+        assert newest["title"] == "Disk watch · Nov 18 18:00"
+        assert newest["preview"] == "disk at 91%"
+        assert newest["script_status"] == "ok"
+        assert older["preview"] == "silent (empty output)"
+        assert older["script_status"] == "silent"
+        assert newest["started_at"] == _output_file_epoch(datetime(2026, 11, 18, 18, 0, 1))
+        for r in runs:
+            assert r["run_kind"] == "script"
+            assert r["source"] == "cron"
+            assert r["end_reason"] == "cron_complete"
+            assert r["message_count"] == 0
+            assert r["profile"] == "default"
+            assert r["output_path"].endswith(".md")
+
+        limited = self.client.get(f"/api/cron/jobs/{job['id']}/runs?profile=default&limit=1")
+        assert [r["id"] for r in limited.json()["runs"]] == [newest["id"]]
+
+        # Agent jobs keep their session-only history; their reports aren't runs.
+        agent = self.client.get(f"/api/cron/jobs/{agent_job['id']}/runs?profile=default")
+        assert agent.json()["runs"] == []
+
     # --- Automation Blueprints ---
 
     def test_cron_blueprints_list(self):
