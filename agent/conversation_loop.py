@@ -433,6 +433,51 @@ def _content_policy_blocked_result(
     }
 
 
+# ── Open-todo nudge ─────────────────────────────────────────────────────
+# The todo tool's description and TODO_GUIDANCE both ask the model to keep
+# its list current and close the loop before answering. Prose compliance
+# decays on long tool-heavy runs (observed: one todo call, thirty other tool
+# calls, final answer with 0/5 done). When a real final answer arrives while
+# items are still pending/in_progress, hold the turn once and ask for the
+# update explicitly — the UI then reflects what was actually done.
+_TODO_NUDGE_MAX_LISTED = 8
+
+
+def _open_todo_items(agent) -> List[Dict[str, str]]:
+    """Todo items still pending/in_progress, or [] when the tool is off."""
+    store = getattr(agent, "_todo_store", None)
+    if store is None or "todo" not in (getattr(agent, "valid_tool_names", None) or ()):
+        return []
+    try:
+        return [
+            item for item in store.read()
+            if item.get("status") in ("pending", "in_progress")
+        ]
+    except Exception:
+        return []
+
+
+def _build_todo_nudge_message(open_items: List[Dict[str, str]]) -> Dict[str, Any]:
+    listed = "\n".join(
+        f"- [{item.get('status')}] {item.get('id')}: {item.get('content')}"
+        for item in open_items[:_TODO_NUDGE_MAX_LISTED]
+    )
+    more = len(open_items) - _TODO_NUDGE_MAX_LISTED
+    if more > 0:
+        listed += f"\n- … and {more} more"
+    return {
+        "role": "user",
+        "content": (
+            "[System: Your answer is complete, but the todo list still has "
+            f"{len(open_items)} open item(s):\n{listed}\n"
+            "Call the todo tool now (merge mode) to mark each one completed, "
+            "or cancelled if you did not do it. Do not repeat your answer; "
+            "after updating, reply with at most one short line.]"
+        ),
+        "_todo_nudge_synthetic": True,
+    }
+
+
 def run_conversation(
     agent,
     user_message: str,
@@ -4313,6 +4358,29 @@ def run_conversation(
                     continue
 
                 codex_ack_continuations = 0
+
+                # ── Open-todo nudge (once per turn) ───────────────
+                # A real final answer with the plan still open: show the
+                # answer as it is (interim emit), then ask once for the
+                # todo update and let the loop run one more round. If the
+                # model ignores the nudge, the next answer ends the turn.
+                if not getattr(agent, "_todo_nudge_sent", False):
+                    _open_todos = _open_todo_items(agent)
+                    if _open_todos and agent._has_content_after_think_block(final_response):
+                        agent._todo_nudge_sent = True
+                        logger.info(
+                            "Final answer with %d open todo item(s) — nudging model to update the list",
+                            len(_open_todos),
+                        )
+                        agent._emit_status(
+                            f"📋 {len(_open_todos)} todo item(s) still open — asking the model to update the list"
+                        )
+                        interim_msg = agent._build_assistant_message(assistant_message, finish_reason)
+                        messages.append(interim_msg)
+                        agent._emit_interim_assistant_message(interim_msg)
+                        messages.append(_build_todo_nudge_message(_open_todos))
+                        agent._session_messages = messages
+                        continue
 
                 if truncated_response_parts:
                     final_response = "".join(truncated_response_parts) + final_response
