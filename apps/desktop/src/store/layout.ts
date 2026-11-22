@@ -4,8 +4,10 @@ import {
   arraysEqual,
   insertUniqueId,
   persistBoolean,
+  persistString,
   persistStringArray,
   storedBoolean,
+  storedString,
   storedStringArray
 } from '@/lib/storage'
 
@@ -26,6 +28,7 @@ const SIDEBAR_CRON_OPEN_STORAGE_KEY = 'hermes.desktop.sidebarCronOpen'
 const SIDEBAR_MESSAGING_OPEN_STORAGE_KEY = 'hermes.desktop.sidebarMessagingOpen'
 const SIDEBAR_SESSION_ORDER_STORAGE_KEY = 'hermes.desktop.sessionOrder'
 const SIDEBAR_SESSION_ORDER_MANUAL_STORAGE_KEY = 'hermes.desktop.sessionOrder.manual'
+const SIDEBAR_SESSION_SORT_STORAGE_KEY = 'hermes.desktop.sessionSort'
 const SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY = 'hermes.desktop.workspaceOrder'
 const SIDEBAR_WORKSPACE_PARENT_ORDER_STORAGE_KEY = 'hermes.desktop.workspaceParentOrder'
 const PANES_FLIPPED_STORAGE_KEY = 'hermes.desktop.panesFlipped'
@@ -60,6 +63,13 @@ export const $sidebarWidth: ReadableAtom<number> = computed($paneStates, states 
 export const $pinnedSessionIds = atom(storedStringArray(SIDEBAR_PINNED_STORAGE_KEY))
 export const $sidebarSessionOrderIds = atom(storedStringArray(SIDEBAR_SESSION_ORDER_STORAGE_KEY))
 export const $sidebarSessionOrderManual = atom(storedBoolean(SIDEBAR_SESSION_ORDER_MANUAL_STORAGE_KEY, false))
+
+/** How the recents list is sorted when no manual drag order is active. */
+export type SidebarSessionSort = 'created' | 'recent'
+
+const readSessionSort = (): SidebarSessionSort => (storedString(SIDEBAR_SESSION_SORT_STORAGE_KEY) === 'created' ? 'created' : 'recent')
+
+export const $sidebarSessionSort = atom<SidebarSessionSort>(readSessionSort())
 export const $sidebarWorkspaceOrderIds = atom(storedStringArray(SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY))
 // Order of the top-level repo "parent" groups in the worktree tree (worktrees
 // within a parent reuse $sidebarWorkspaceOrderIds).
@@ -91,6 +101,7 @@ $sidebarCronOpen.subscribe(open => persistBoolean(SIDEBAR_CRON_OPEN_STORAGE_KEY,
 $sidebarMessagingOpenIds.subscribe(ids => persistStringArray(SIDEBAR_MESSAGING_OPEN_STORAGE_KEY, [...ids]))
 $sidebarSessionOrderIds.subscribe(ids => persistStringArray(SIDEBAR_SESSION_ORDER_STORAGE_KEY, [...ids]))
 $sidebarSessionOrderManual.subscribe(manual => persistBoolean(SIDEBAR_SESSION_ORDER_MANUAL_STORAGE_KEY, manual))
+$sidebarSessionSort.subscribe(sort => persistString(SIDEBAR_SESSION_SORT_STORAGE_KEY, sort))
 $sidebarWorkspaceOrderIds.subscribe(ids => persistStringArray(SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY, [...ids]))
 $sidebarWorkspaceParentOrderIds.subscribe(ids =>
   persistStringArray(SIDEBAR_WORKSPACE_PARENT_ORDER_STORAGE_KEY, [...ids])
@@ -170,6 +181,12 @@ export function setSidebarAgentsGrouped(grouped: boolean) {
 export function setSidebarSessionOrderIds(ids: string[]) {
   if (!arraysEqual($sidebarSessionOrderIds.get(), ids)) {
     $sidebarSessionOrderIds.set(ids)
+  }
+}
+
+export function setSidebarSessionSort(sort: SidebarSessionSort) {
+  if ($sidebarSessionSort.get() !== sort) {
+    $sidebarSessionSort.set(sort)
   }
 }
 

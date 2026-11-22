@@ -56,6 +56,7 @@ import {
   $sidebarRecentsOpen,
   $sidebarSessionOrderIds,
   $sidebarSessionOrderManual,
+  $sidebarSessionSort,
   $sidebarWorkspaceOrderIds,
   $sidebarWorkspaceParentOrderIds,
   pinSession,
@@ -67,6 +68,7 @@ import {
   setSidebarRecentsOpen,
   setSidebarSessionOrderIds,
   setSidebarSessionOrderManual,
+  setSidebarSessionSort,
   setSidebarWorkspaceOrderIds,
   setSidebarWorkspaceParentOrderIds,
   SIDEBAR_SESSIONS_PAGE_SIZE,
@@ -101,7 +103,7 @@ import type { SidebarNavItem } from '../../types'
 
 import { SidebarCronJobsSection } from './cron-jobs-section'
 import { SidebarLoadMoreRow } from './load-more-row'
-import { resolveManualSessionOrderIds } from './order'
+import { resolveManualSessionOrderIds, sortSessionsForSidebar } from './order'
 import { ProfileRail } from './profile-switcher'
 import { SidebarSessionRow } from './session-row'
 import { VirtualSessionList } from './virtual-session-list'
@@ -415,13 +417,11 @@ export function ChatSidebar({
     [sessions, showAllProfiles, profileScope]
   )
 
-  // Agent session order is pinned to creation time (started_at), NOT activity —
-  // a new message must never float a session to the top. Position only changes
-  // for a brand-new session or an explicit manual drag (agentOrderIds).
-  const sortedSessions = useMemo(
-    () => [...visibleSessions].sort((a, b) => (b.started_at || 0) - (a.started_at || 0)),
-    [visibleSessions]
-  )
+  // Recents follow the user's sort choice: last used (default) floats the
+  // chat you just continued to the top; creation time keeps rows fixed so only
+  // a brand-new session or a manual drag (agentOrderIds) moves anything.
+  const sessionSort = useStore($sidebarSessionSort)
+  const sortedSessions = useMemo(() => sortSessionsForSidebar(visibleSessions, sessionSort), [visibleSessions, sessionSort])
 
   const workingSessionIdSet = useMemo(() => new Set(workingSessionIds), [workingSessionIds])
 
@@ -533,6 +533,7 @@ export function ChatSidebar({
 
     if (!next.length && agentOrderIds.length) {
       setSidebarSessionOrderIds([])
+
       return
     }
 
@@ -969,7 +970,27 @@ export function ChatSidebar({
                   // Grouping operates on unpinned recents; if everything is pinned
                   // the toggle does nothing, and it's irrelevant in the ALL-profiles
                   // view (always grouped by profile), so hide the button (not the slot).
-                  <div className="grid size-6 shrink-0 place-items-center">
+                  <div className="flex shrink-0 items-center">
+                    {agentSessions.length > 1 && !agentOrderManual ? (
+                      <Tip label={sessionSort === 'recent' ? s.sortTitleRecent : s.sortTitleCreated}>
+                        <Button
+                          aria-label={sessionSort === 'recent' ? s.sortAriaRecent : s.sortAriaCreated}
+                          className={cn(
+                            'text-(--ui-text-tertiary) opacity-70 hover:bg-(--ui-control-hover-background) hover:text-foreground hover:opacity-100 focus-visible:opacity-100',
+                            sessionSort === 'recent' && 'bg-(--ui-control-active-background) text-foreground opacity-100'
+                          )}
+                          onClick={event => {
+                            event.stopPropagation()
+                            setSidebarRecentsOpen(true)
+                            setSidebarSessionSort(sessionSort === 'recent' ? 'created' : 'recent')
+                          }}
+                          size="icon-xs"
+                          variant="ghost"
+                        >
+                          <Codicon name="history" size="0.75rem" />
+                        </Button>
+                      </Tip>
+                    ) : null}
                     {!showAllProfiles && agentSessions.length > 0 ? (
                       <Tip label={agentsGrouped ? s.groupTitleGrouped : s.groupTitleUngrouped}>
                         <Button

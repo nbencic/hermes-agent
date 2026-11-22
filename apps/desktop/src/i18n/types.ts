@@ -882,6 +882,10 @@ export interface Translations {
     groupAriaUngrouped: string
     groupTitleGrouped: string
     groupTitleUngrouped: string
+    sortAriaCreated: string
+    sortAriaRecent: string
+    sortTitleCreated: string
+    sortTitleRecent: string
     allPinned: string
     shiftClickHint: string
     noWorkspace: string
